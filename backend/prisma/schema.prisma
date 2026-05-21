@@ -1,0 +1,63 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+model Product {
+  id           Int        @id @default(autoincrement())
+  name         String
+  defaultHubId String?    @map("default_hub_id") @db.Char(36)
+  defaultHub   Hub?       @relation("DefaultHubProducts", fields: [defaultHubId], references: [id])
+  hubStocks    HubStock[]
+
+  @@map("products")
+}
+
+model Hub {
+  id                 String       @id @default(uuid()) @db.Char(36)
+  name               String
+  code               String       @unique
+  address            String       @db.Text
+  area               String?      @db.VarChar(150)
+  city               String       @db.VarChar(100)
+  pincode            String       @db.VarChar(6)
+  isActive           Boolean      @default(true) @map("is_active")
+  createdAt          DateTime     @default(now()) @map("created_at")
+  pincodes           HubPincode[]
+  stocks             HubStock[]
+  defaultForProducts Product[]    @relation("DefaultHubProducts")
+
+  @@map("hubs")
+}
+
+model HubPincode {
+  id            String  @id @default(uuid()) @db.Char(36)
+  hubId         String  @map("hub_id") @db.Char(36)
+  pincode       String  @db.VarChar(6)
+  deliveryDays  Int     @map("delivery_days")
+  isServiceable Boolean @default(true) @map("is_serviceable")
+  codAvailable  Boolean @default(true) @map("cod_available")
+  hub           Hub     @relation(fields: [hubId], references: [id], onDelete: Cascade)
+
+  @@unique([hubId, pincode])
+  @@index([pincode])
+  @@map("hub_pincodes")
+}
+
+model HubStock {
+  id          String   @id @default(uuid()) @db.Char(36)
+  hubId       String   @map("hub_id") @db.Char(36)
+  productId   Int      @map("product_id")
+  variantId   String?  @map("variant_id") @db.VarChar(100)
+  quantity    Int      @default(0)
+  reservedQty Int      @default(0) @map("reserved_qty")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  hub         Hub      @relation(fields: [hubId], references: [id], onDelete: Cascade)
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([hubId, productId, variantId])
+  @@map("hub_stocks")
+}
