@@ -4,13 +4,39 @@ import api from '../services/api';
 import { addCartItem } from '../services/cartApi';
 import { useAuth } from '../context/AuthContext';
 import ProductCard from '../components/ProductCard';
-import { SlidersHorizontal, X } from 'lucide-react';
+import { ChevronDown, SlidersHorizontal, X } from 'lucide-react';
+
+const defaultOpenFilterSections = {
+  category: false,
+  brand: false,
+  size: true,
+  color: false,
+  discount: false
+};
+
+const fallbackColorOptions = ['Black', 'Pink', 'Red', 'Blue', 'Green', 'Yellow', 'White', 'Purple'];
+
+function colorSwatchValue(color) {
+  const value = String(color || '').trim().toLowerCase();
+  const swatches = {
+    black: '#111827',
+    blue: '#2563eb',
+    green: '#16a34a',
+    pink: '#ff3f6c',
+    purple: '#7c3aed',
+    red: '#dc2626',
+    white: '#ffffff',
+    yellow: '#facc15'
+  };
+  return swatches[value] || color || '#d1d5db';
+}
 
 export default function Products() {
   const [products, setProducts] = useState([]);
   const [filters, setFilters] = useState({});
   const [query, setQuery] = useState({});
   const [sort, setSort] = useState('recommended');
+  const [openFilterSections, setOpenFilterSections] = useState(defaultOpenFilterSections);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [message, setMessage] = useState('');
   const [wishlistIds, setWishlistIds] = useState([]);
@@ -87,10 +113,33 @@ export default function Products() {
     setQuery((current) => ({ ...current, onSale: 'true' }));
   }
 
-  const colorOptions = ['Black', 'Pink', 'Red', 'Blue', 'Green', 'Yellow', 'White', 'Purple'];
+  function toggleFilterSection(section) {
+    setOpenFilterSections((current) => ({ ...current, [section]: !current[section] }));
+  }
+
+  function FilterSection({ id, title, children }) {
+    const isOpen = openFilterSections[id] ?? false;
+    const bodyId = `filter-section-${id}`;
+    return (
+      <div className="filter-group">
+        <button
+          className="filter-section-toggle"
+          type="button"
+          aria-controls={bodyId}
+          aria-expanded={isOpen}
+          onClick={() => toggleFilterSection(id)}
+        >
+          <span>{title}</span>
+          <ChevronDown size={16} />
+        </button>
+        <div className="filter-section-body" id={bodyId} hidden={!isOpen}>{children}</div>
+      </div>
+    );
+  }
+
+  const colorOptions = filters.colors?.length ? filters.colors : fallbackColorOptions;
   const categoryChips = ['Party Wear', 'Casual Dresses', 'Ethnic Wear', 'Summer Dresses', 'Office Wear'];
   const visibleProducts = [...products]
-    .filter((product) => !query.color || String(product.color || '').toLowerCase().includes(String(query.color).toLowerCase()))
     .filter((product) => query.availability !== 'inStock' || Number(product.stock || 0) > 0)
     .sort((a, b) => {
       const priceA = Number(a.effectivePrice || a.salePrice || a.price || 0);
@@ -118,28 +167,25 @@ export default function Products() {
         />
       </label>
 
-      <div className="filter-group">
-        <h3>Categories</h3>
+      <FilterSection id="category" title="Category">
         {(filters.categories || []).map((item) => (
           <label key={item}><input type="radio" name="category" checked={query.category === item} onChange={() => update('category', item)} /> {item}</label>
         ))}
-      </div>
+      </FilterSection>
 
-      <div className="filter-group">
-        <h3>Brand</h3>
+      <FilterSection id="brand" title="Brand">
         {(filters.brands || []).map((item) => (
           <label key={item}><input type="radio" name="brand" checked={query.brand === item} onChange={() => update('brand', item)} /> {item}</label>
         ))}
-      </div>
+      </FilterSection>
 
-      <div className="filter-group">
-        <h3>Size</h3>
+      <FilterSection id="size" title="Size">
         <div className="size-chip-grid">
           {(filters.sizes || []).map((item) => (
             <button key={item} className={query.size === item ? 'active' : ''} type="button" onClick={() => update('size', query.size === item ? '' : item)}>{item}</button>
           ))}
         </div>
-      </div>
+      </FilterSection>
 
       <div className="filter-group">
         <h3>Price Range</h3>
@@ -149,8 +195,7 @@ export default function Products() {
         </div>
       </div>
 
-      <div className="filter-group">
-        <h3>Discount</h3>
+      <FilterSection id="discount" title="Discount">
         {[
           ['10-30', '10% to 30%'],
           ['30-50', '30% to 50%'],
@@ -159,14 +204,17 @@ export default function Products() {
           <label key={value}><input type="radio" name="discount" checked={query.saleRange === value} onChange={() => update('saleRange', value)} /> {label}</label>
         ))}
         <label><input type="checkbox" checked={query.onSale === 'true'} onChange={(event) => update('onSale', event.target.checked ? 'true' : '')} /> Sale items only</label>
-      </div>
+      </FilterSection>
 
-      <div className="filter-group">
-        <h3>Color</h3>
+      <FilterSection id="color" title="Color">
         {colorOptions.map((item) => (
-          <label key={item}><input type="radio" name="color" checked={query.color === item} onChange={() => update('color', item)} /> {item}</label>
+          <label className="color-filter-option" key={item}>
+            <input type="radio" name="color" checked={query.color === item} onChange={() => update('color', item)} />
+            <span className="color-filter-swatch" style={{ background: colorSwatchValue(item) }} />
+            {item}
+          </label>
         ))}
-      </div>
+      </FilterSection>
 
       <div className="filter-group">
         <h3>Availability</h3>

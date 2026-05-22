@@ -51,6 +51,7 @@ createRoot(document.getElementById('root')).render(
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/cart" element={<ProtectedRoute><Cart /></ProtectedRoute>} />
+          <Route path="/checkout/cart" element={<ProtectedRoute><BuyNowCheckout /></ProtectedRoute>} />
           <Route path="/checkout/buy-now" element={<ProtectedRoute><BuyNowCheckout /></ProtectedRoute>} />
           <Route path="/checkout/buy/:productId" element={<ProtectedRoute><BuyNowCheckout /></ProtectedRoute>} />
           <Route path="/orders" element={<ProtectedRoute><Orders /></ProtectedRoute>} />

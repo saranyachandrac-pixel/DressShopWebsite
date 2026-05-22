@@ -58,7 +58,7 @@ disableExpiredSales().catch((error) => console.error('Sale cleanup failed:', err
 
 router.get('/', asyncHandler(async (req, res) => {
   await disableExpiredSales();
-  const { category, brand, size, minPrice, maxPrice, search, onSale, saleRange } = req.query;
+  const { category, brand, size, color, minPrice, maxPrice, search, onSale, saleRange } = req.query;
   const where = [];
   const params = [];
 
@@ -67,6 +67,7 @@ router.get('/', asyncHandler(async (req, res) => {
   if (category) { where.push('category = ?'); params.push(category); }
   if (brand) { where.push('brand = ?'); params.push(brand); }
   if (size) { where.push('size = ?'); params.push(size); }
+  if (color) { where.push('color = ?'); params.push(color); }
   if (minPrice) { where.push('price >= ?'); params.push(Number(minPrice)); }
   if (maxPrice) { where.push('price <= ?'); params.push(Number(maxPrice)); }
   if (search) { where.push('(name LIKE ? OR description LIKE ?)'); params.push(`%${search}%`, `%${search}%`); }
@@ -90,13 +91,15 @@ router.get('/', asyncHandler(async (req, res) => {
   const [categories] = await pool.query('SELECT DISTINCT category FROM products WHERE category IS NOT NULL ORDER BY category');
   const [brands] = await pool.query('SELECT DISTINCT brand FROM products WHERE brand IS NOT NULL ORDER BY brand');
   const [sizes] = await pool.query('SELECT DISTINCT size FROM products WHERE size IS NOT NULL ORDER BY size');
+  const [colors] = await pool.query('SELECT DISTINCT color FROM products WHERE color IS NOT NULL AND color <> "" ORDER BY color');
 
   res.json({
     products: filteredProducts,
     filters: {
       categories: categories.map((item) => item.category),
       brands: brands.map((item) => item.brand),
-      sizes: sizes.map((item) => item.size)
+      sizes: sizes.map((item) => item.size),
+      colors: colors.map((item) => item.color)
     }
   });
 }));

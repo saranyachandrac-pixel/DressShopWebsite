@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import { getSavedPincode, savePincode } from '../hooks/useDeliveryDate';
+import { useAuth } from '../context/AuthContext';
 import UserCoupons from '../components/UserCoupons';
 
 const blankAddress = { full_name: '', phone: '', line1: '', line2: '', city: '', state: '', pincode: '', is_default: true };
@@ -46,6 +47,7 @@ export default function BuyNowCheckout() {
   const [searchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
+  const { refreshCartCount } = useAuth();
   const size = searchParams.get('size') || '';
   const quantity = Math.max(1, Number(searchParams.get('quantity') || 1));
   const savedMonthlyCheckout = (() => {
@@ -57,6 +59,7 @@ export default function BuyNowCheckout() {
   })();
   const checkoutSessionId = searchParams.get('session') || location.state?.checkoutSessionId || savedMonthlyCheckout.checkoutSessionId || '';
   const source = searchParams.get('source') || location.state?.source || savedMonthlyCheckout.source || '';
+  const isCartCheckout = source === 'cart' || location.pathname === '/checkout/cart';
   const isMonthlyTemplateCheckout = source === 'monthly-template' && checkoutSessionId;
   const [item, setItem] = useState(null);
   const [items, setItems] = useState([]);
@@ -81,23 +84,26 @@ export default function BuyNowCheckout() {
 
   async function refresh() {
     setMessage('');
-    if (!isMonthlyTemplateCheckout && !productId) {
+    if (!isCartCheckout && !isMonthlyTemplateCheckout && !productId) {
       setMessage('Checkout session missing. Please start Buy Now again.');
       setStep('error');
       return;
     }
     try {
-      const [checkoutRes, addressRes, paymentRes] = await Promise.all([
-        isMonthlyTemplateCheckout
-          ? api.get(`/orders/monthly-template/summary/${checkoutSessionId}`, { params: { paymentMethod, couponCode: appliedCoupon } })
-          : api.get(`/orders/buy-now/summary/${productId}`, { params: { size, quantity, paymentMethod, couponCode: appliedCoupon } }),
+      const [checkoutRes, cartRes, addressRes, paymentRes] = await Promise.all([
+        isCartCheckout
+          ? api.get('/orders/summary', { params: { paymentMethod, couponCode: appliedCoupon } })
+          : isMonthlyTemplateCheckout
+            ? api.get(`/orders/monthly-template/summary/${checkoutSessionId}`, { params: { paymentMethod, couponCode: appliedCoupon } })
+            : api.get(`/orders/buy-now/summary/${productId}`, { params: { size, quantity, paymentMethod, couponCode: appliedCoupon } }),
+        isCartCheckout ? api.get('/cart') : Promise.resolve({ data: { items: [] } }),
         api.get('/addresses'),
         api.get('/payment-methods').catch(() => ({ data: [] }))
       ]);
-      const checkoutItems = checkoutRes.data.items || (checkoutRes.data.item ? [checkoutRes.data.item] : []);
+      const checkoutItems = isCartCheckout ? (cartRes.data.items || []) : checkoutRes.data.items || (checkoutRes.data.item ? [checkoutRes.data.item] : []);
       setItems(checkoutItems);
       setItem(checkoutRes.data.item || checkoutItems[0] || null);
-      setSummary(checkoutRes.data.summary);
+      setSummary(isCartCheckout ? checkoutRes.data : checkoutRes.data.summary);
       setAddresses(addressRes.data);
       setSavedPaymentMethods(paymentRes.data);
       api.get('/wallet/balance').then(({ data }) => setWallet(data.wallet)).catch(() => setWallet(null));
@@ -116,11 +122,13 @@ export default function BuyNowCheckout() {
 
   async function refreshSummary(nextPaymentMethod) {
     try {
-      const { data } = isMonthlyTemplateCheckout
-        ? await api.get(`/orders/monthly-template/summary/${checkoutSessionId}`, { params: { paymentMethod: nextPaymentMethod, couponCode: appliedCoupon } })
-        : await api.get(`/orders/buy-now/summary/${productId}`, { params: { size, quantity, paymentMethod: nextPaymentMethod, couponCode: appliedCoupon } });
-      setSummary(data.summary);
-      const checkoutItems = data.items || (data.item ? [data.item] : []);
+      const { data } = isCartCheckout
+        ? await api.get('/orders/summary', { params: { paymentMethod: nextPaymentMethod, couponCode: appliedCoupon } })
+        : isMonthlyTemplateCheckout
+          ? await api.get(`/orders/monthly-template/summary/${checkoutSessionId}`, { params: { paymentMethod: nextPaymentMethod, couponCode: appliedCoupon } })
+          : await api.get(`/orders/buy-now/summary/${productId}`, { params: { size, quantity, paymentMethod: nextPaymentMethod, couponCode: appliedCoupon } });
+      setSummary(isCartCheckout ? data : data.summary);
+      const checkoutItems = isCartCheckout ? items : data.items || (data.item ? [data.item] : []);
       setItems(checkoutItems);
       setItem(data.item || checkoutItems[0] || null);
     } catch (error) {
@@ -132,17 +140,20 @@ export default function BuyNowCheckout() {
     setMessage('');
     try {
       const code = String(codeOverride || '').trim().toUpperCase();
-      const { data } = isMonthlyTemplateCheckout
-        ? await api.get(`/orders/monthly-template/summary/${checkoutSessionId}`, { params: { paymentMethod, couponCode: code } })
-        : await api.get(`/orders/buy-now/summary/${productId}`, { params: { size, quantity, paymentMethod, couponCode: code } });
-      setSummary(data.summary);
-      const checkoutItems = data.items || (data.item ? [data.item] : []);
+      const { data } = isCartCheckout
+        ? await api.get('/orders/summary', { params: { paymentMethod, couponCode: code } })
+        : isMonthlyTemplateCheckout
+          ? await api.get(`/orders/monthly-template/summary/${checkoutSessionId}`, { params: { paymentMethod, couponCode: code } })
+          : await api.get(`/orders/buy-now/summary/${productId}`, { params: { size, quantity, paymentMethod, couponCode: code } });
+      const nextSummary = isCartCheckout ? data : data.summary;
+      setSummary(nextSummary);
+      const checkoutItems = isCartCheckout ? items : data.items || (data.item ? [data.item] : []);
       setItems(checkoutItems);
       setItem(data.item || checkoutItems[0] || null);
-      setAppliedCoupon(data.summary.couponCode || code);
-      setCouponCode(data.summary.couponCode || code);
-      localStorage.setItem(COUPON_STORAGE_KEY, data.summary.couponCode || code);
-      setMessage(`${data.summary.couponCode || code} applied.`);
+      setAppliedCoupon(nextSummary.couponCode || code);
+      setCouponCode(nextSummary.couponCode || code);
+      localStorage.setItem(COUPON_STORAGE_KEY, nextSummary.couponCode || code);
+      setMessage(`${nextSummary.couponCode || code} applied.`);
     } catch (error) {
       setAppliedCoupon('');
       setMessage(error.response?.data?.message || 'Could not apply coupon.');
@@ -153,11 +164,13 @@ export default function BuyNowCheckout() {
     setAppliedCoupon('');
     setCouponCode('');
     localStorage.removeItem(COUPON_STORAGE_KEY);
-    const { data } = isMonthlyTemplateCheckout
-      ? await api.get(`/orders/monthly-template/summary/${checkoutSessionId}`, { params: { paymentMethod } })
-      : await api.get(`/orders/buy-now/summary/${productId}`, { params: { size, quantity, paymentMethod } });
-    setSummary(data.summary);
-    const checkoutItems = data.items || (data.item ? [data.item] : []);
+    const { data } = isCartCheckout
+      ? await api.get('/orders/summary', { params: { paymentMethod } })
+      : isMonthlyTemplateCheckout
+        ? await api.get(`/orders/monthly-template/summary/${checkoutSessionId}`, { params: { paymentMethod } })
+        : await api.get(`/orders/buy-now/summary/${productId}`, { params: { size, quantity, paymentMethod } });
+    setSummary(isCartCheckout ? data : data.summary);
+    const checkoutItems = isCartCheckout ? items : data.items || (data.item ? [data.item] : []);
     setItems(checkoutItems);
     setItem(data.item || checkoutItems[0] || null);
     setMessage('');
@@ -166,7 +179,7 @@ export default function BuyNowCheckout() {
   async function checkDelivery() {
     const selectedAddressDetails = addresses.find((x) => String(x.id) === String(selectedAddress));
     const pincode = selectedAddressDetails?.pincode || getSavedPincode();
-    const deliveryItems = isMonthlyTemplateCheckout ? items : (item ? [item] : []);
+    const deliveryItems = isCartCheckout || isMonthlyTemplateCheckout ? items : (item ? [item] : []);
     if (!deliveryItems.length || !pincode) return;
 
     setDeliveryInfo((current) => ({ ...current, loading: true, error: '', pincode }));
@@ -279,11 +292,14 @@ export default function BuyNowCheckout() {
     const paymentError = validatePaymentDetails();
     if (paymentError) return setMessage(paymentError);
     try {
-      const payload = isMonthlyTemplateCheckout
-        ? { checkoutSessionId, addressId: selectedAddress, paymentMethod, paymentDetails, couponCode: appliedCoupon }
-        : { productId, addressId: selectedAddress, paymentMethod, paymentDetails, size, quantity, couponCode: appliedCoupon };
-      const { data } = await api.post(isMonthlyTemplateCheckout ? '/orders/monthly-template/checkout' : '/orders/buy-now', payload);
+      const payload = isCartCheckout
+        ? { addressId: selectedAddress, paymentMethod, paymentDetails, couponCode: appliedCoupon }
+        : isMonthlyTemplateCheckout
+          ? { checkoutSessionId, addressId: selectedAddress, paymentMethod, paymentDetails, couponCode: appliedCoupon }
+          : { productId, addressId: selectedAddress, paymentMethod, paymentDetails, size, quantity, couponCode: appliedCoupon };
+      const { data } = await api.post(isCartCheckout ? '/orders' : isMonthlyTemplateCheckout ? '/orders/monthly-template/checkout' : '/orders/buy-now', payload);
       if (isMonthlyTemplateCheckout) localStorage.removeItem('monthly_template_checkout');
+      if (isCartCheckout) await refreshCartCount();
       navigate(`/orders/${data.id}`);
     } catch (error) {
       setMessage(error.response?.data?.message || 'Could not place order.');
@@ -299,8 +315,8 @@ export default function BuyNowCheckout() {
       <section className="checkout-hero">
         <div>
           <p className="eyebrow">Fast checkout</p>
-          <h1>{isMonthlyTemplateCheckout ? 'Buy selected dresses now' : 'Buy this dress now'}</h1>
-          <p>{isMonthlyTemplateCheckout ? 'Selected monthly template items, one address, one clear payment step.' : 'One item, one address, one clear payment step.'}</p>
+          <h1>{isCartCheckout ? 'Complete your cart order' : isMonthlyTemplateCheckout ? 'Buy selected dresses now' : 'Buy this dress now'}</h1>
+          <p>{isCartCheckout ? 'Your bag, one address, one clear payment step.' : isMonthlyTemplateCheckout ? 'Selected monthly template items, one address, one clear payment step.' : 'One item, one address, one clear payment step.'}</p>
         </div>
       </section>
 
@@ -452,6 +468,7 @@ export default function BuyNowCheckout() {
           {paymentMethod === 'Cash On Delivery' && <div className="summary-line"><span>Cash on delivery charge</span><strong>Rs.{formatMoney(CASH_ON_DELIVERY_CHARGE)}</strong></div>}
           <div className="summary-line total"><span>Total</span><strong>Rs.{formatMoney(payableTotal)}</strong></div>
           <button className="btn btn-dark w-100" disabled={step !== 'payment'} onClick={placeOrder}>Pay Rs.{formatMoney(payableTotal)}</button>
+          <button className="continue-shop-btn" type="button" onClick={() => navigate('/')}>Continue To Shop</button>
         </aside>
       </section>
     </main>

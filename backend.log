@@ -1,0 +1,5 @@
+
+> dress-shop-backend@1.0.0 dev
+> node src/server.js
+
+Dress Shop API running on http://localhost:5000
