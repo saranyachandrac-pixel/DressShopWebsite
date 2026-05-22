@@ -122,6 +122,7 @@ export default function HubManagement() {
         <a className="active" href="/admin/hubs">Hubs</a>
         <a href="/admin/sale">Sale</a>
         <a href="/admin/coupons">Coupons</a>
+        <a href="/admin/logo">Logo Management</a>
       </div>
 
       <section className="hub-admin-layout">

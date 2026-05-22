@@ -88,6 +88,7 @@ export default function AdminSalePage() {
         <a href="/admin/hubs">Hubs</a>
         <a className="active" href="/admin/sale">Sale</a>
         <a href="/admin/coupons">Coupons</a>
+        <a href="/admin/logo">Logo Management</a>
       </div>
       {message && <div className="alert alert-info">{message}</div>}
 

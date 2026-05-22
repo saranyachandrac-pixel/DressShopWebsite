@@ -59,6 +59,11 @@ export default function AdminHelpCenter() {
       <p className="eyebrow">Admin</p>
       <h1>Help Center articles</h1>
       <div className="admin-tabs">
+        <a href="/admin">Products & orders</a>
+        <a href="/admin/hubs">Hubs</a>
+        <a href="/admin/sale">Sale</a>
+        <a href="/admin/coupons">Coupons</a>
+        <a href="/admin/logo">Logo Management</a>
         <a className="active" href="/admin/help">Articles</a>
         <a href="/admin/help/tickets">Tickets</a>
       </div>

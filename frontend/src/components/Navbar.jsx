@@ -1,8 +1,9 @@
 import { Link, NavLink, useNavigate } from 'react-router-dom';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Headset, Heart, Menu, Search, ShoppingBag, User, X } from 'lucide-react';
 import MenMegaMenu from './MenMegaMenu';
+import api from '../services/api';
 
 export default function Navbar() {
   const { user, isAdmin, logout, cartCount } = useAuth();
@@ -10,7 +11,23 @@ export default function Navbar() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [menMenuOpen, setMenMenuOpen] = useState(false);
   const [searchText, setSearchText] = useState('');
+  const [siteLogo, setSiteLogo] = useState(null);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    loadSiteLogo();
+    window.addEventListener('site-logo-updated', loadSiteLogo);
+    return () => window.removeEventListener('site-logo-updated', loadSiteLogo);
+  }, []);
+
+  async function loadSiteLogo() {
+    try {
+      const { data } = await api.get('/logo');
+      setSiteLogo(data.logo || null);
+    } catch (error) {
+      setSiteLogo(null);
+    }
+  }
 
   function signOut() {
     logout();
@@ -51,8 +68,14 @@ export default function Navbar() {
         </button>
 
         <Link className="brand-mark fashion-logo" to="/" onClick={() => { setMobileOpen(false); setMenMenuOpen(false); }}>
-          <span>DS</span>
-          <strong>DressShop</strong>
+          {siteLogo?.logoUrl ? (
+            <img className="site-logo-image" src={siteLogo.logoUrl} alt="DressShop" />
+          ) : (
+            <>
+              <span>DS</span>
+              <strong>DressShop</strong>
+            </>
+          )}
         </Link>
 
         <div className={mobileOpen ? 'fashion-menu open' : 'fashion-menu'}>
@@ -77,6 +100,7 @@ export default function Navbar() {
           {isAdmin && <NavLink to="/admin" onClick={() => { setMobileOpen(false); setMenMenuOpen(false); }}>ADMIN</NavLink>}
           {isAdmin && <NavLink to="/admin/sale" onClick={() => { setMobileOpen(false); setMenMenuOpen(false); }}>SALE</NavLink>}
           {isAdmin && <NavLink to="/admin/coupons" onClick={() => { setMobileOpen(false); setMenMenuOpen(false); }}>COUPONS</NavLink>}
+          {isAdmin && <NavLink to="/admin/logo" onClick={() => { setMobileOpen(false); setMenMenuOpen(false); }}>LOGO</NavLink>}
           {isAdmin && <NavLink to="/admin/help" onClick={() => { setMobileOpen(false); setMenMenuOpen(false); }}>HELP</NavLink>}
         </div>
 
@@ -118,6 +142,7 @@ export default function Navbar() {
                     {isAdmin && <Link to="/admin" onClick={() => setMenuOpen(false)}>Admin Dashboard</Link>}
                     {isAdmin && <Link to="/admin/sale" onClick={() => setMenuOpen(false)}>Sale Manager</Link>}
                     {isAdmin && <Link to="/admin/coupons" onClick={() => setMenuOpen(false)}>Coupon Control</Link>}
+                    {isAdmin && <Link to="/admin/logo" onClick={() => setMenuOpen(false)}>Logo Management</Link>}
                     <button onClick={signOut} type="button">Logout</button>
                   </div>
                 )}

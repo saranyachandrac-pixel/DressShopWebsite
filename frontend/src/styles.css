@@ -26,8 +26,8 @@ body {
 
 main { width: min(1180px, calc(100% - 32px)); margin: 28px auto 70px; }
 h1, h2, h3 { font-family: 'Fraunces', serif; }
-h1 { font-size: clamp(2.4rem, 5vw, 5.8rem); line-height: .92; letter-spacing: -0.06em; }
-h2 { font-size: 1.35rem; }
+h1 { font-size: clamp(1.6rem, 2.6vw, 2.6rem); line-height: 1.08; letter-spacing: 0; }
+h2 { font-size: 1.15rem; }
 a { color: var(--leaf); font-weight: 800; }
 button, input, select { font: inherit; }
 input, select {
@@ -522,7 +522,7 @@ input, select {
 .monthly-template-header h1 {
   margin: 8px 0 0;
   font-family: inherit;
-  font-size: clamp(2rem, 3vw, 2.8rem);
+  font-size: clamp(1.7rem, 2.4vw, 2.25rem);
   line-height: 1.08;
   letter-spacing: 0;
 }
@@ -764,7 +764,7 @@ input, select {
 }
 
 .checkout-hero h1 {
-  font-size: clamp(2.2rem, 4vw, 4.8rem);
+  font-size: clamp(1.85rem, 3vw, 3.25rem);
   letter-spacing: 0;
 }
 
@@ -868,7 +868,7 @@ input, select {
   gap: 22px;
 }
 .account-header h1 {
-  font-size: clamp(2.2rem, 4vw, 4.6rem);
+  font-size: clamp(1.85rem, 3vw, 3.1rem);
 }
 .account-card {
   background: rgba(255, 255, 255, .76);
@@ -943,6 +943,107 @@ input, select {
   gap: 6px;
   font-weight: 800;
   text-transform: capitalize;
+}
+
+.logo-admin-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.logo-admin-form {
+  position: sticky;
+  top: 96px;
+}
+
+.logo-upload-drop {
+  min-height: 152px;
+  display: grid !important;
+  place-items: center;
+  gap: 8px !important;
+  padding: 24px;
+  border: 1px dashed rgba(255, 63, 108, .5);
+  border-radius: 8px;
+  background: #fff7f9;
+  text-align: center;
+  cursor: pointer;
+}
+
+.logo-upload-drop input {
+  display: none;
+}
+
+.logo-upload-drop span {
+  color: var(--ink);
+  font-weight: 1000;
+}
+
+.logo-upload-drop small {
+  color: var(--muted);
+}
+
+.logo-preview-panel,
+.active-logo-frame {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.logo-preview-panel span {
+  color: var(--muted);
+  font-size: .78rem;
+  font-weight: 1000;
+  text-transform: uppercase;
+}
+
+.logo-preview-panel img,
+.active-logo-frame img {
+  width: min(260px, 100%);
+  max-height: 120px;
+  object-fit: contain;
+}
+
+.logo-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.logo-action-row .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.logo-status-card p {
+  margin: 10px 0 0;
+}
+
+.admin-toast {
+  position: fixed;
+  top: 92px;
+  right: 22px;
+  z-index: 500;
+  max-width: min(360px, calc(100vw - 32px));
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: var(--ink);
+  color: #fff;
+  box-shadow: 0 18px 48px rgba(40, 44, 63, .2);
+  font-weight: 800;
+}
+
+.admin-toast.success {
+  background: #116b58;
+}
+
+.admin-toast.error {
+  background: #b42318;
 }
 .pincode-admin-stack {
   display: grid;
@@ -1087,7 +1188,7 @@ input, select {
   box-shadow: var(--shadow);
 }
 .product-detail-copy h1 {
-  font-size: clamp(2.2rem, 4vw, 4.8rem);
+  font-size: clamp(1.85rem, 3vw, 3.2rem);
 }
 .sale-countdown {
   display: inline-block;
@@ -1200,7 +1301,8 @@ input, select {
 @keyframes rise { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
 
 @media (max-width: 920px) {
-  .filter-bar, .product-grid, .split-page, .admin-layout, .sale-admin-layout, .hub-admin-layout, .account-grid, .admin-order-grid, .product-detail, .impact-grid, .buy-now-layout, .address-grid { grid-template-columns: 1fr; }
+  .filter-bar, .product-grid, .split-page, .admin-layout, .sale-admin-layout, .hub-admin-layout, .logo-admin-layout, .account-grid, .admin-order-grid, .product-detail, .impact-grid, .buy-now-layout, .address-grid { grid-template-columns: 1fr; }
+  .logo-admin-form { position: static; }
   .hub-delivery-layout { grid-template-columns: 1fr; gap: 24px; }
   .hero-panel { min-height: 360px; border-radius: 28px; }
   .cart-summary-card { position: static; }
@@ -1292,6 +1394,14 @@ main.myntra-page {
 
 .fashion-logo strong {
   font-weight: 1000;
+}
+
+.site-logo-image {
+  width: auto;
+  height: 48px;
+  max-width: 170px;
+  display: block;
+  object-fit: contain;
 }
 
 .fashion-menu {
@@ -1671,7 +1781,7 @@ main.myntra-page {
 .myntra-hero h1 {
   max-width: 680px;
   font-family: inherit;
-  font-size: clamp(2.1rem, 5vw, 4.6rem);
+  font-size: clamp(1.8rem, 3.4vw, 3.2rem);
   line-height: 1.02;
   letter-spacing: 0;
   margin: 0 0 12px;
@@ -2164,7 +2274,7 @@ main.myntra-page {
 .men-category-header h1 {
   margin: 0;
   font-family: inherit;
-  font-size: clamp(2rem, 4vw, 3.8rem);
+  font-size: clamp(1.7rem, 3vw, 2.7rem);
   letter-spacing: 0;
 }
 
@@ -2627,7 +2737,7 @@ main.myntra-page {
 .help-page h1 {
   margin: 0;
   font-family: inherit;
-  font-size: clamp(2rem, 3vw, 2.75rem);
+  font-size: clamp(1.65rem, 2.4vw, 2.2rem);
   line-height: 1.12;
   letter-spacing: 0;
 }
@@ -2635,7 +2745,7 @@ main.myntra-page {
 .help-hero h1 {
   margin: 0;
   font-family: inherit;
-  font-size: clamp(2.4rem, 5vw, 4rem);
+  font-size: clamp(1.9rem, 3.4vw, 3rem);
   line-height: 1.05;
   letter-spacing: 0;
 }
@@ -3119,7 +3229,7 @@ main.myntra-page {
 .add-money-hero h1 {
   margin: 0;
   font-family: inherit;
-  font-size: clamp(2.1rem, 5vw, 4.4rem);
+  font-size: clamp(1.8rem, 3.4vw, 3.1rem);
   letter-spacing: 0;
 }
 

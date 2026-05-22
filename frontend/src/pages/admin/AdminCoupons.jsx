@@ -100,6 +100,7 @@ export default function AdminCoupons() {
         <a href="/admin/hubs">Hubs</a>
         <a href="/admin/sale">Sale</a>
         <a className="active" href="/admin/coupons">Coupons</a>
+        <a href="/admin/logo">Logo Management</a>
       </div>
 
       <section className="coupon-admin-layout">

@@ -217,6 +217,7 @@ export default function Admin() {
         <a href="/admin/hubs">Hubs</a>
         <a href="/admin/sale">Sale</a>
         <a href="/admin/coupons">Coupons</a>
+        <a href="/admin/logo">Logo Management</a>
         <a href="/admin/help">Help Center</a>
       </div>
       {message && <div className="alert alert-info">{message}</div>}

@@ -17,6 +17,7 @@ import Admin from './pages/Admin';
 import AdminSalePage from './pages/AdminSalePage';
 import HubManagement from './pages/admin/HubManagement';
 import AdminCoupons from './pages/admin/AdminCoupons';
+import LogoManagement from './pages/admin/LogoManagement';
 import ProductDetail from './pages/ProductDetail';
 import Profile from './pages/Profile';
 import SavedPayments from './pages/SavedPayments';
@@ -78,6 +79,7 @@ createRoot(document.getElementById('root')).render(
           <Route path="/admin/sale" element={<ProtectedRoute adminOnly><AdminSalePage /></ProtectedRoute>} />
           <Route path="/admin/hubs" element={<ProtectedRoute adminOnly><HubManagement /></ProtectedRoute>} />
           <Route path="/admin/coupons" element={<ProtectedRoute adminOnly><AdminCoupons /></ProtectedRoute>} />
+          <Route path="/admin/logo" element={<ProtectedRoute adminOnly><LogoManagement /></ProtectedRoute>} />
           <Route path="/admin/help" element={<ProtectedRoute adminOnly><AdminHelpCenter /></ProtectedRoute>} />
           <Route path="/admin/help/tickets" element={<ProtectedRoute adminOnly><AdminTickets /></ProtectedRoute>} />
         </Routes>

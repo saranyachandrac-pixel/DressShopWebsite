@@ -19,6 +19,7 @@ const walletRoutes = require('./routes/walletRoutes');
 const cancellationRoutes = require('./routes/cancellationRoutes');
 const postDeliveryRoutes = require('./routes/postDeliveryRoutes');
 const monthlyTemplateRoutes = require('./routes/monthlyTemplate');
+const logoRoutes = require('./routes/logo');
 const { helpRouter, adminHelpRouter } = require('./routes/help');
 const { router: paymentMethodRoutes } = require('./routes/paymentMethods');
 
@@ -55,6 +56,7 @@ app.use('/api/wallet', walletRoutes);
 app.use('/api/cancellations', cancellationRoutes);
 app.use('/api/post-delivery', postDeliveryRoutes);
 app.use('/api/monthly-template', monthlyTemplateRoutes);
+app.use('/api', logoRoutes);
 app.use('/api/help', helpRouter);
 app.use('/api/coupons', userCouponRoutes);
 app.use('/api/user', accountCouponRoutes);
@@ -65,6 +67,9 @@ app.use('/api/admin', couponRoutes);
 app.use((req, res) => res.status(404).json({ message: 'Route not found.' }));
 app.use((error, req, res, next) => {
   console.error(error);
+  if (error.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).json({ message: 'Logo file size must be 2MB or less.' });
+  }
   res.status(error.status || 500).json({ message: error.message || 'Server error.' });
 });
 

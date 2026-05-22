@@ -456,6 +456,17 @@ async function setup() {
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS site_logos (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      logo_url VARCHAR(500) NOT NULL,
+      file_name VARCHAR(255) NOT NULL,
+      is_active BOOLEAN DEFAULT TRUE,
+      created_by INT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+    );
+
     CREATE TABLE IF NOT EXISTS hubs (
       id CHAR(36) PRIMARY KEY,
       name VARCHAR(255) NOT NULL,
@@ -669,6 +680,7 @@ async function setup() {
   await ensureColumn(connection, 'support_tickets', 'ticket_type', 'ticket_type VARCHAR(100)');
   await ensureColumn(connection, 'support_ticket_replies', 'sender_type', "sender_type VARCHAR(20) NOT NULL DEFAULT 'user'");
   await ensureColumn(connection, 'support_ticket_replies', 'sender_id', 'sender_id INT NULL');
+  await ensureColumn(connection, 'site_logos', 'updated_at', 'updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP');
   await connection.query("UPDATE support_tickets SET ticket_no = CONCAT('TKT', LPAD(id, 6, '0')) WHERE ticket_no IS NULL OR ticket_no = ''");
   await connection.query("UPDATE support_tickets SET ticket_type = issue_type WHERE ticket_type IS NULL OR ticket_type = ''");
   await connection.query("UPDATE support_ticket_replies SET sender_type = IF(is_admin, 'admin', 'user') WHERE sender_type IS NULL OR sender_type = ''");
