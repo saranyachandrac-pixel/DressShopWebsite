@@ -1,0 +1,35 @@
+### Send guest order tracking OTP
+POST http://localhost:5000/api/guest-orders/send-otp
+Content-Type: application/json
+
+{
+  "contact": "guest@example.com"
+}
+
+### Verify guest order tracking OTP
+POST http://localhost:5000/api/guest-orders/verify-otp
+Content-Type: application/json
+
+{
+  "contact": "guest@example.com",
+  "otp": "123456"
+}
+
+### Fetch all guest orders after OTP verification
+GET http://localhost:5000/api/guest-orders/my-orders
+Authorization: Bearer {{trackingToken}}
+
+### Fetch safe tracking details for one owned order
+GET http://localhost:5000/api/guest-orders/track/ORD12345
+Authorization: Bearer {{trackingToken}}
+
+### Negative: order number alone must not expose details
+GET http://localhost:5000/api/guest-orders/track/ORD12345
+
+### Negative: unknown contact should receive only a generic send-otp response
+POST http://localhost:5000/api/guest-orders/send-otp
+Content-Type: application/json
+
+{
+  "contact": "wrong@example.com"
+}

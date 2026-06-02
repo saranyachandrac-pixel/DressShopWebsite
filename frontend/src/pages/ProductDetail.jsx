@@ -5,6 +5,8 @@ import { addCartItem } from '../services/cartApi';
 import { useAuth } from '../context/AuthContext';
 import ProductPurchasePanel from '../components/ProductPurchasePanel';
 import UserCoupons from '../components/UserCoupons';
+import { estimateSuperCoins } from '../services/superCoinApi';
+import { addGuestCartItem, setGuestBuyNowItem } from '../utils/guestCart';
 
 function countdown(endDate) {
   if (!endDate) return '';
@@ -30,11 +32,16 @@ export default function ProductDetail() {
   const [timer, setTimer] = useState('');
   const [message, setMessage] = useState('');
   const [wishlistSaved, setWishlistSaved] = useState(false);
+  const [coinEstimate, setCoinEstimate] = useState(0);
+  const [replacementPolicy, setReplacementPolicy] = useState(null);
   const isKidsDress = String(product?.category || '').toLowerCase().includes('kids');
   const defaultSize = isKidsDress ? '5-6Y' : (product?.size || 'M');
 
   useEffect(() => {
     api.get(`/products/${id}`).then(({ data }) => setProduct(data));
+    api.get(`/products/${id}/replacement-policy`)
+      .then(({ data }) => setReplacementPolicy(data))
+      .catch(() => setReplacementPolicy(null));
   }, [id]);
 
   useEffect(() => {
@@ -47,14 +54,14 @@ export default function ProductDetail() {
   useEffect(() => {
     if (!user || !product?.id) {
       setWishlistSaved(false);
+      setCoinEstimate(0);
       return;
     }
 
-    api.get('/wishlist')
-      .then(({ data }) => {
-        setWishlistSaved((data.items || []).some((item) => item.id === product.id));
-      })
-      .catch(() => setWishlistSaved(false));
+    Promise.all([
+      api.get('/wishlist').then(({ data }) => setWishlistSaved((data.items || []).some((item) => item.id === product.id))).catch(() => setWishlistSaved(false)),
+      estimateSuperCoins(product.id).then(({ data }) => setCoinEstimate(data.coins || 0)).catch(() => setCoinEstimate(0))
+    ]);
   }, [user, product?.id]);
 
   const terms = useMemo(() => {
@@ -63,7 +70,12 @@ export default function ProductDetail() {
   }, [product]);
 
   async function addToCart(quantity = 1) {
-    if (!user) return navigate('/login');
+    if (!user) {
+      addGuestCartItem(product, { quantity, size: defaultSize, color: product.color || '' });
+      setMessage(`${product.name} added to guest bag.`);
+      refreshCartCount();
+      return;
+    }
     try {
       await addCartItem({ productId: product.id, quantity, size: defaultSize, color: product.color || '' });
       setMessage(`${product.name} added to cart.`);
@@ -75,7 +87,10 @@ export default function ProductDetail() {
 
   function buyNow(quantity = 1) {
     const checkoutPath = `/checkout/buy/${product.id}?size=${encodeURIComponent(defaultSize || '')}&quantity=${encodeURIComponent(quantity)}`;
-    if (!user) return navigate(`/login?redirect=${encodeURIComponent(checkoutPath)}`);
+    if (!user) {
+      setGuestBuyNowItem(product, { quantity, size: defaultSize, color: product.color || '' });
+      return navigate('/guest-checkout?source=buy-now');
+    }
     navigate(checkoutPath);
   }
 
@@ -98,6 +113,11 @@ export default function ProductDetail() {
 
   if (!product) return <main><p className="helper-text">Loading product...</p></main>;
 
+  const reviews = product.reviews || [];
+  const avgRating = reviews.length
+    ? reviews.reduce((sum, review) => sum + Number(review.rating || 0), 0) / reviews.length
+    : 0;
+
   return (
     <main className="product-detail-page">
       {message && <div className="alert alert-success">{message}</div>}
@@ -111,6 +131,13 @@ export default function ProductDetail() {
           {product.isOnSale && <div className="sale-countdown">{product.saleType === 'bogo' ? 'Buy 1 Get 1 Free' : timer}</div>}
           {product.isOnSale && <p className="sale-terms">Limit: maximum 1 quantity per customer. {product.saleType === 'bogo' ? 'One free item is included with one paid item.' : ''}</p>}
           {terms && <p className="sale-terms">{terms}</p>}
+          {replacementPolicy?.isReplacementAvailable && (
+            <div className="replacement-policy-note">
+              <strong>Replacement available within {replacementPolicy.replacementDays} days</strong>
+              {replacementPolicy.replacementPolicy && <span>{replacementPolicy.replacementPolicy}</span>}
+            </div>
+          )}
+          {user && coinEstimate > 0 && <div className="super-coin-product-note">Earn {coinEstimate} Super Coins on this order</div>}
           <ProductPurchasePanel
             product={product}
             size={defaultSize}
@@ -132,19 +159,19 @@ export default function ProductDetail() {
             <p className="eyebrow">Customer reviews</p>
             <h2>Ratings & reviews</h2>
           </div>
-          <strong>{product.reviewCount ? `${product.averageRating} / 5` : 'No ratings yet'}</strong>
+          <strong>{reviews.length ? `${avgRating.toFixed(1)} / 5` : 'No ratings yet'}</strong>
         </div>
-        {!product.reviews?.length && <p className="helper-text">No visible reviews yet.</p>}
-        {!!product.reviews?.length && (
+        {!reviews.length && <p className="helper-text">No ratings yet.</p>}
+        {!!reviews.length && (
           <div className="payment-summary">
-            {product.reviews.map((review) => (
+            {reviews.map((review) => (
               <div className="summary-line" key={review.id}>
                 <span>
                   <strong>{'★'.repeat(Number(review.rating))}{'☆'.repeat(5 - Number(review.rating))}</strong>
                   <br />
-                  {review.review_text || 'No review text'}
+                  {review.review || review.review_text || 'No review text'}
                   <br />
-                  <small>{review.customer_name} / {new Date(review.created_at).toLocaleDateString()}</small>
+                  <small>{review.user_name || review.customer_name || 'Customer'} / {new Date(review.created_at).toLocaleDateString()}</small>
                 </span>
                 <strong>{review.rating}/5</strong>
               </div>

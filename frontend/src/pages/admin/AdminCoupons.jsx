@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import api from '../../services/api';
+import AdminTabs from '../../components/AdminTabs';
 
 const emptyCoupon = {
   coupon_code: '',
@@ -95,13 +96,7 @@ export default function AdminCoupons() {
       <p className="eyebrow">Admin dashboard</p>
       <h1>Coupon Control</h1>
       {message && <div className="alert alert-info">{message}</div>}
-      <div className="admin-tabs">
-        <a href="/admin">Products & orders</a>
-        <a href="/admin/hubs">Hubs</a>
-        <a href="/admin/sale">Sale</a>
-        <a className="active" href="/admin/coupons">Coupons</a>
-        <a href="/admin/logo">Logo Management</a>
-      </div>
+      <AdminTabs />
 
       <section className="coupon-admin-layout">
         <form className="admin-form coupon-edit-panel" onSubmit={saveCoupon}>

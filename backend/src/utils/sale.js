@@ -4,6 +4,20 @@ function money(value) {
   return Math.max(0, Math.round((Number(value) || 0) * 100) / 100);
 }
 
+function clampPercent(value) {
+  return Math.min(Math.max(Number(value) || 0, 0), 100);
+}
+
+function firstMoney(...values) {
+  for (const value of values) {
+    if (value !== undefined && value !== null && value !== '') {
+      const amount = money(value);
+      if (amount > 0) return amount;
+    }
+  }
+  return 0;
+}
+
 function toDateOnly(value) {
   if (!value) return null;
   const date = new Date(value);
@@ -52,21 +66,62 @@ function saleDiscountPercent(product, now = new Date()) {
 }
 
 function mapSaleProduct(product, now = new Date()) {
-  const originalPrice = money(product.originalPrice || product.price);
+  const discountPercentage = clampPercent(
+    product.discount_percentage
+      ?? product.discountPercent
+      ?? product.offer_percentage
+      ?? product.discount_percent
+      ?? product.discount
+  );
+  const explicitSellingPrice = firstMoney(product.selling_price);
+  const rawPrice = money(product.price);
+  const originalPrice = discountPercentage > 0 && rawPrice > 0 && !explicitSellingPrice
+    ? rawPrice
+    : firstMoney(
+      product.original_price,
+      product.mrp,
+      product.originalPrice,
+      product.price,
+      product.selling_price
+    );
+  const discountedPrice = discountPercentage > 0
+    ? money(originalPrice * (1 - discountPercentage / 100))
+    : 0;
+  const databaseSellingPrice = explicitSellingPrice
+    || (rawPrice > 0 && (!originalPrice || rawPrice < originalPrice) ? rawPrice : 0);
+  const regularSellingPrice = databaseSellingPrice || discountedPrice || rawPrice || originalPrice;
   const active = isSaleActive(product, now);
   const salePrice = calculateSalePrice({ ...product, originalPrice }, now);
+  const effectivePrice = active ? salePrice : regularSellingPrice;
+  const effectiveDiscountPercentage = active
+    ? saleDiscountPercent({ ...product, originalPrice }, now)
+    : discountPercentage;
+
   return {
     ...product,
     isOnSale: Boolean(active),
     saleScheduled: isSaleScheduled(product, now),
     saleConfigured: Boolean(product.isOnSale),
     originalPrice,
+    original_price: originalPrice,
+    mrp: originalPrice,
     salePrice,
-    effectivePrice: active ? salePrice : money(product.price || originalPrice),
-    saleDiscountPercent: saleDiscountPercent({ ...product, originalPrice }, now),
+    selling_price: effectivePrice,
+    effectivePrice,
+    price: effectivePrice,
+    discount: effectiveDiscountPercentage,
+    discount_percent: effectiveDiscountPercentage,
+    discount_percentage: effectiveDiscountPercentage,
+    discountPercent: effectiveDiscountPercentage,
+    offer_percentage: effectiveDiscountPercentage,
+    saleDiscountPercent: effectiveDiscountPercentage,
     salePurchaseLimit: active ? 1 : null,
     bogoFreeQuantity: active && product.saleType === 'bogo' ? 1 : 0,
-    saleLabel: active && product.saleType === 'bogo' ? 'Buy 1 Get 1 Free' : null
+    saleLabel: active && product.saleType === 'bogo' ? 'Buy 1 Get 1 Free' : null,
+    image: product.image_url || product.image,
+    imageUrl: product.image_url || product.image,
+    is_active: product.is_active ?? product.isActive ?? true,
+    status: product.status || (product.is_active === 0 || product.isActive === false ? 'inactive' : 'active')
   };
 }
 

@@ -1,0 +1,7 @@
+UPDATE products
+SET gender = UPPER(gender)
+WHERE gender IS NOT NULL;
+
+ALTER TABLE products
+  MODIFY COLUMN gender ENUM('MEN','WOMEN','KIDS','UNISEX') NULL,
+  ADD COLUMN IF NOT EXISTS kids_category VARCHAR(50) NULL;

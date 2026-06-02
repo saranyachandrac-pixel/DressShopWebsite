@@ -1,8 +1,42 @@
 const pool = require('../config/db');
 const { refundOrder } = require('../services/walletService');
+const { reverseOrderCoins } = require('../services/superCoinService');
 
 const CANCELLABLE_STATUSES = new Set(['PENDING', 'CONFIRMED', 'PROCESSING', 'PLACED', 'PACKED']);
 const BLOCKED_STATUSES = new Set(['SHIPPED', 'DELIVERED', 'CANCELLED', 'REFUNDED']);
+const FINAL_REFUND_STATUSES = new Set(['REFUNDED', 'REJECTED']);
+
+async function ensureCancellationActionSchema(connection = pool) {
+  await ensureColumn(connection, 'order_cancellations', 'admin_remarks', 'admin_remarks TEXT NULL');
+  await connection.query('ALTER TABLE order_cancellations MODIFY admin_remarks TEXT NULL');
+  await ensureColumn(connection, 'order_cancellations', 'action_by', 'action_by VARCHAR(100) NULL');
+  await ensureColumn(connection, 'order_cancellations', 'action_date', 'action_date DATETIME NULL');
+  await connection.query(`
+    CREATE TABLE IF NOT EXISTS cancellation_action_logs (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      cancellation_id INT NOT NULL,
+      order_id INT NOT NULL,
+      product_id INT NOT NULL,
+      old_refund_status VARCHAR(30),
+      new_refund_status VARCHAR(30),
+      admin_remarks TEXT,
+      action_by VARCHAR(100),
+      action_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_cancellation_action_logs_cancellation (cancellation_id),
+      FOREIGN KEY (cancellation_id) REFERENCES order_cancellations(id) ON DELETE CASCADE
+    )
+  `);
+}
+
+async function ensureColumn(connection, table, column, definition) {
+  const [rows] = await connection.execute(
+    `SELECT COLUMN_NAME
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+    [table, column]
+  );
+  if (!rows.length) await connection.query(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+}
 
 async function cancelOrderItem(req, res) {
   const orderId = Number(req.params.orderId);
@@ -86,6 +120,11 @@ async function cancelOrderItem(req, res) {
         'UPDATE orders SET delivery_status = ?, paid_status = ? WHERE id = ?',
         ['CANCELLED', nextPaidStatus, row.orderId]
       );
+      await reverseOrderCoins(connection, {
+        id: row.orderId,
+        order_number: row.order_number,
+        user_id: row.userId
+      });
       await connection.execute(
         'UPDATE order_cancellations SET refund_status = ? WHERE order_id = ?',
         [nextRefundStatus, row.orderId]
@@ -106,6 +145,7 @@ async function cancelOrderItem(req, res) {
 }
 
 async function listCancellations(req, res) {
+  await ensureCancellationActionSchema();
   const [rows] = await pool.execute(
     `SELECT oc.id AS cancellation_id,
             oc.order_id,
@@ -113,21 +153,26 @@ async function listCancellations(req, res) {
             oc.product_id,
             oi.product_name,
             oc.user_id,
-            u.name AS customer_name,
-            u.email AS customer_email,
+            COALESCE(u.name, CONCAT('Guest ', COALESCE(oc.guest_contact_value, 'Customer'))) AS customer_name,
+            COALESCE(u.email, oc.guest_contact_value) AS customer_email,
+            oc.guest_contact_type,
+            oc.guest_contact_value,
             oc.cancel_reason,
             oc.refund_status,
             oc.cancelled_at,
-            oc.admin_remarks
+            oc.admin_remarks,
+            oc.action_by,
+            oc.action_date
      FROM order_cancellations oc
      JOIN order_items oi ON oi.id = oc.order_item_id
-     JOIN users u ON u.id = oc.user_id
+     LEFT JOIN users u ON u.id = oc.user_id
      ORDER BY oc.cancelled_at DESC`
   );
   res.json(rows);
 }
 
 async function updateCancellation(req, res) {
+  await ensureCancellationActionSchema();
   const refundStatus = req.body.refundStatus ? String(req.body.refundStatus).trim().toUpperCase() : null;
   const adminRemarks = req.body.adminRemarks == null ? null : String(req.body.adminRemarks).trim();
   await pool.execute(
@@ -140,4 +185,60 @@ async function updateCancellation(req, res) {
   res.json({ message: 'Cancellation updated.' });
 }
 
-module.exports = { cancelOrderItem, listCancellations, updateCancellation };
+async function actionCancellation(req, res) {
+  await ensureCancellationActionSchema();
+  const cancellationId = Number(req.params.id);
+  const refundStatus = String(req.body.refund_status || req.body.refundStatus || '').trim().toUpperCase();
+  const adminRemarks = String(req.body.admin_remarks || req.body.adminRemarks || '').trim();
+  if (!cancellationId) return res.status(400).json({ message: 'Cancellation ID is required.' });
+  if (!['REFUNDED', 'REJECTED'].includes(refundStatus)) {
+    return res.status(400).json({ message: 'Refund status must be REFUNDED or REJECTED.' });
+  }
+
+  const actionBy = req.user?.name || req.user?.email || `Admin ${req.user?.id || ''}`.trim();
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [[cancellation]] = await connection.execute(
+      `SELECT id, order_id, product_id, refund_status
+       FROM order_cancellations
+       WHERE id = ?
+       FOR UPDATE`,
+      [cancellationId]
+    );
+    if (!cancellation) {
+      await connection.rollback();
+      return res.status(404).json({ message: 'Cancellation not found.' });
+    }
+    const oldRefundStatus = String(cancellation.refund_status || '').toUpperCase();
+    if (FINAL_REFUND_STATUSES.has(oldRefundStatus)) {
+      await connection.rollback();
+      return res.status(409).json({ message: `Refund already ${oldRefundStatus}.` });
+    }
+
+    await connection.execute(
+      `UPDATE order_cancellations
+       SET refund_status = ?,
+           admin_remarks = ?,
+           action_by = ?,
+           action_date = NOW()
+       WHERE id = ?`,
+      [refundStatus, adminRemarks || null, actionBy, cancellationId]
+    );
+    await connection.execute(
+      `INSERT INTO cancellation_action_logs
+        (cancellation_id, order_id, product_id, old_refund_status, new_refund_status, admin_remarks, action_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [cancellationId, cancellation.order_id, cancellation.product_id, oldRefundStatus || null, refundStatus, adminRemarks || null, actionBy]
+    );
+    await connection.commit();
+    res.json({ message: refundStatus === 'REFUNDED' ? 'Refund approved.' : 'Refund rejected.' });
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+module.exports = { actionCancellation, cancelOrderItem, listCancellations, updateCancellation };

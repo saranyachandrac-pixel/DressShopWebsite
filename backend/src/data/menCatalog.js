@@ -28,6 +28,60 @@ const menMenu = [
   ]
 ];
 
+const womenMenu = [
+  [
+    {
+      heading: 'Indian & Fusion Wear',
+      groups: [
+        { heading: 'Kurtas & Suits', items: ['Kurtas', 'Kurta Sets', 'Anarkali Suits', 'Churidar Sets'] },
+        { heading: 'Sarees & Ethnic', items: ['Sarees', 'Lehenga Choli', 'Ethnic Dresses', 'Dupattas'] }
+      ]
+    }
+  ],
+  [
+    { heading: 'Western Wear', items: ['Dresses', 'Tops', 'T-Shirts', 'Shirts', 'Jeans', 'Trousers', 'Skirts', 'Jumpsuits'] }
+  ],
+  [
+    { heading: 'Winter Wear', items: ['Sweaters', 'Jackets', 'Sweatshirts', 'Shrugs'] }
+  ],
+  [
+    { heading: 'Lingerie & Sleepwear', items: ['Bras', 'Briefs', 'Night Suits', 'Camisoles'] }
+  ]
+];
+
+const kidsMenu = [
+  [
+    {
+      heading: 'Boys Clothing',
+      groups: [
+        { heading: 'Topwear', items: ['Boys T-Shirts', 'Boys Shirts', 'Boys Sweatshirts'] },
+        { heading: 'Bottomwear', items: ['Boys Jeans', 'Boys Shorts', 'Boys Track Pants'] }
+      ]
+    }
+  ],
+  [
+    {
+      heading: 'Girls Clothing',
+      groups: [
+        { heading: 'Dresses', items: ['Girls Frocks', 'Party Dresses', 'Girls Ethnic Wear'] },
+        { heading: 'Everyday Wear', items: ['Girls Tops', 'Girls Leggings', 'Girls Jeans'] }
+      ]
+    }
+  ],
+  [
+    { heading: 'Infants', items: ['Baby Rompers', 'Baby Sets', 'Baby Dresses'] }
+  ],
+  [
+    { heading: 'Kids Winter Wear', items: ['Kids Jackets', 'Kids Sweaters', 'Kids Hoodies'] }
+  ]
+];
+
+const genderMenus = {
+  men: menMenu,
+  women: womenMenu,
+  kids: kidsMenu
+};
+
 const imageUrls = [
   'https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?auto=format&fit=crop&w=900&q=80',
   'https://images.unsplash.com/photo-1523398002811-999ca8dec234?auto=format&fit=crop&w=900&q=80',
@@ -37,11 +91,30 @@ const imageUrls = [
   'https://images.unsplash.com/photo-1542272604-787c3835535d?auto=format&fit=crop&w=900&q=80'
 ];
 
-function flattenCategories() {
+const womenImageUrls = [
+  'https://images.unsplash.com/photo-1539109136881-3be0616acf4b?auto=format&fit=crop&w=900&q=80',
+  'https://images.unsplash.com/photo-1483985988355-763728e1935b?auto=format&fit=crop&w=900&q=80',
+  'https://images.unsplash.com/photo-1529139574466-a303027c1d8b?auto=format&fit=crop&w=900&q=80',
+  'https://images.unsplash.com/photo-1496747611176-843222e1e57c?auto=format&fit=crop&w=900&q=80',
+  'https://images.unsplash.com/photo-1515372039744-b8f02a3ae446?auto=format&fit=crop&w=900&q=80',
+  'https://images.unsplash.com/photo-1509631179647-0177331693ae?auto=format&fit=crop&w=900&q=80'
+];
+
+const kidsImageUrls = [
+  'https://images.unsplash.com/photo-1503919545889-aef636e10ad4?auto=format&fit=crop&w=900&q=80',
+  'https://images.unsplash.com/photo-1519238263530-99bdd11df2ea?auto=format&fit=crop&w=900&q=80',
+  'https://images.unsplash.com/photo-1522771930-78848d9293e8?auto=format&fit=crop&w=900&q=80',
+  'https://images.unsplash.com/photo-1471286174890-9c112ffca5b4?auto=format&fit=crop&w=900&q=80',
+  'https://images.unsplash.com/photo-1514090458221-65bb69cf63e6?auto=format&fit=crop&w=900&q=80',
+  'https://images.unsplash.com/photo-1515488042361-ee00e0ddd4e4?auto=format&fit=crop&w=900&q=80'
+];
+
+function flattenCategories(gender = 'men') {
+  const menu = genderMenus[gender] || menMenu;
   const rows = [];
   let sortOrder = 10;
 
-  for (const column of menMenu) {
+  for (const column of menu) {
     for (const section of column) {
       const sectionSlug = slugify(section.heading);
       rows.push({ name: section.heading, slug: sectionSlug, parentSlug: null, sortOrder: sortOrder++, isLeaf: !section.groups });
@@ -65,9 +138,20 @@ function flattenCategories() {
   return rows;
 }
 
-function productSeeds(category, index) {
-  const brands = ['Roadster', 'Mast & Harbour', 'Highlander', 'HRX', 'DressShop'];
-  const colors = ['Black', 'Navy', 'Olive', 'White', 'Charcoal'];
+function productSeeds(category, index, gender = 'men') {
+  const brandSets = {
+    men: ['Roadster', 'Mast & Harbour', 'Highlander', 'HRX', 'DressShop'],
+    women: ['Sangria', 'Anouk', 'DressBerry', 'Tokyo Talkies', 'DressShop'],
+    kids: ['Tiny Tara', 'YK Kids', 'LilPicks', 'Cherry Crumble', 'DressShop']
+  };
+  const colorSets = {
+    men: ['Black', 'Navy', 'Olive', 'White', 'Charcoal'],
+    women: ['Rose', 'Maroon', 'Ivory', 'Lavender', 'Teal'],
+    kids: ['Yellow', 'Sky Blue', 'Pink', 'Mint', 'Red']
+  };
+  const brands = brandSets[gender] || brandSets.men;
+  const colors = colorSets[gender] || colorSets.men;
+  const images = gender === 'women' ? womenImageUrls : gender === 'kids' ? kidsImageUrls : imageUrls;
   const baseMrp = 1299 + (index % 7) * 300;
 
   return [0, 1, 2].map((offset) => {
@@ -82,17 +166,20 @@ function productSeeds(category, index) {
       mrp,
       discount,
       rating: Number((4.1 + ((index + offset) % 7) / 10).toFixed(1)),
-      sizes: 'S,M,L,XL',
+      sizes: gender === 'kids' ? '2-3Y,4-5Y,6-7Y,8-9Y' : 'S,M,L,XL',
       color: colors[(index + offset) % colors.length],
       stock: 12 + offset * 6,
-      imageUrl: imageUrls[(index + offset) % imageUrls.length],
-      description: `Premium ${category.name.toLowerCase()} for men with everyday comfort, sharp fit and easy styling.`
+      imageUrl: images[(index + offset) % images.length],
+      description: `Premium ${category.name.toLowerCase()} for ${gender} with everyday comfort, sharp fit and easy styling.`
     };
   });
 }
 
 module.exports = {
   menMenu,
+  womenMenu,
+  kidsMenu,
+  genderMenus,
   flattenCategories,
   productSeeds,
   slugify

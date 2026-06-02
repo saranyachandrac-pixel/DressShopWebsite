@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import api from '../services/api';
+import AdminTabs from '../components/AdminTabs';
 
 const formatDate = (value) => value ? new Date(value).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '';
 const statusOptions = ['OPEN', 'ANSWERED', 'IN_PROGRESS', 'RESOLVED'];
@@ -61,15 +62,7 @@ export default function AdminTickets() {
     <main className="help-page admin-ticket-page">
       <p className="eyebrow">Admin</p>
       <h1>Support tickets</h1>
-      <div className="admin-tabs">
-        <a href="/admin">Products & orders</a>
-        <a href="/admin/hubs">Hubs</a>
-        <a href="/admin/sale">Sale</a>
-        <a href="/admin/coupons">Coupons</a>
-        <a href="/admin/logo">Logo Management</a>
-        <a href="/admin/help">Articles</a>
-        <a className="active" href="/admin/help/tickets">Tickets</a>
-      </div>
+      <AdminTabs />
       {toast && <div className="alert alert-success">{toast}</div>}
       {error && <div className="alert alert-warning">{error}</div>}
       {loading && <section className="help-section"><p className="helper-text">Loading support tickets...</p></section>}

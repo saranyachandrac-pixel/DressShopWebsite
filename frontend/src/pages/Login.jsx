@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../services/api';
 
@@ -10,15 +10,13 @@ export default function Login() {
   const [message, setMessage] = useState('');
   const { login } = useAuth();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
 
   async function submit(e) {
     e.preventDefault();
     setMessage('');
     try {
       const user = await login(form.email, form.password);
-      const redirect = searchParams.get('redirect');
-      navigate(redirect || (user.role === 'ADMIN' ? '/admin' : '/'));
+      navigate(user.role === 'ADMIN' ? '/admin/dashboard' : '/home', { replace: true });
     } catch (error) {
       setMessage(error.response?.data?.message || error.message || 'Login failed.');
     }

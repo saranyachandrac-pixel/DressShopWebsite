@@ -33,5 +33,22 @@ async function sendPasswordReset(email, temporaryPassword) {
   await transporter.sendMail(message);
 }
 
-module.exports = { sendPasswordReset };
+async function sendGuestOtp(email, otp) {
+  const transporter = createTransporter();
+  const message = {
+    from: process.env.SMTP_FROM || 'Dress Shop <no-reply@dressshop.local>',
+    to: email,
+    subject: 'Dress Shop guest checkout OTP',
+    text: `Your Dress Shop guest checkout OTP is ${otp}. It expires in 5 minutes.`
+  };
+
+  if (!transporter) {
+    console.log('SMTP is not configured. Guest OTP email preview:', message);
+    return;
+  }
+
+  await transporter.sendMail(message);
+}
+
+module.exports = { sendPasswordReset, sendGuestOtp };
 

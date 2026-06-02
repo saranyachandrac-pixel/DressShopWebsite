@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import api from '../services/api';
+import AdminTabs from '../components/AdminTabs';
 
 const money = (value) => Number(value || 0).toFixed(2);
 
@@ -83,13 +84,7 @@ export default function AdminSalePage() {
     <main>
       <p className="eyebrow">Admin sale control</p>
       <h1>Summer Sale 2026</h1>
-      <div className="admin-tabs">
-        <a href="/admin">Products & orders</a>
-        <a href="/admin/hubs">Hubs</a>
-        <a className="active" href="/admin/sale">Sale</a>
-        <a href="/admin/coupons">Coupons</a>
-        <a href="/admin/logo">Logo Management</a>
-      </div>
+      <AdminTabs />
       {message && <div className="alert alert-info">{message}</div>}
 
       <section className="sale-admin-layout">

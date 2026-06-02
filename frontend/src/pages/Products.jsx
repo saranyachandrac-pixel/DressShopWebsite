@@ -5,11 +5,14 @@ import { addCartItem } from '../services/cartApi';
 import { useAuth } from '../context/AuthContext';
 import ProductCard from '../components/ProductCard';
 import { ChevronDown, SlidersHorizontal, X } from 'lucide-react';
+import { addGuestCartItem, setGuestBuyNowItem } from '../utils/guestCart';
 
 const defaultOpenFilterSections = {
+  gender: false,
   category: false,
+  productType: false,
   brand: false,
-  size: true,
+  size: false,
   color: false,
   discount: false
 };
@@ -41,22 +44,63 @@ export default function Products() {
   const [message, setMessage] = useState('');
   const [wishlistIds, setWishlistIds] = useState([]);
   const [loginPrompt, setLoginPrompt] = useState(null);
+  const [taxonomy, setTaxonomy] = useState({ genders: [], categories: [], productTypes: [] });
   const { user, refreshCartCount } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
   useEffect(() => { loadProducts(); }, [query]);
+  useEffect(() => { loadTaxonomy(); }, []);
+  useEffect(() => {
+    window.addEventListener('product-catalog-updated', loadProducts);
+    return () => window.removeEventListener('product-catalog-updated', loadProducts);
+  }, [query]);
   useEffect(() => { loadWishlist(); }, [user]);
   useEffect(() => {
     const params = new URLSearchParams(location.search);
-    const search = params.get('search') || '';
-    if (search) setQuery((current) => ({ ...current, search }));
+    const nextQuery = {
+      gender: params.get('gender') || undefined,
+      gender_id: params.get('gender_id') || undefined,
+      category: params.get('category') || undefined,
+      category_id: params.get('category_id') || undefined,
+      product_type_id: params.get('product_type_id') || undefined,
+      type: params.get('type') || undefined,
+      keyword: params.get('keyword') || undefined,
+      search: params.get('search') || undefined
+    };
+    setQuery(Object.fromEntries(Object.entries(nextQuery).filter(([, value]) => value)));
   }, [location.search]);
 
   async function loadProducts() {
-    const { data } = await api.get('/products', { params: query });
-    setProducts(data.products);
-    setFilters(data.filters || {});
+    try {
+      setProducts([]);
+      const endpoint = query.gender || query.gender_id || query.category_id || query.product_type_id || query.keyword || query.type ? '/products' : '/products/home';
+      const { data } = await api.get(endpoint, { params: query });
+      setProducts(data.products || []);
+      setFilters(data.filters || {});
+    } catch (error) {
+      setProducts([]);
+      setFilters({});
+      setMessage(error.response?.data?.message || 'Products load panna mudiyala.');
+    }
+  }
+
+  async function loadTaxonomy() {
+    try {
+      const [genderRes, categoryRes, typeRes] = await Promise.all([
+        api.get('/genders'),
+        api.get('/categories'),
+        api.get('/product-types')
+      ]);
+      setTaxonomy({
+        genders: genderRes.data.genders || [],
+        categories: categoryRes.data.categories || [],
+        productTypes: typeRes.data.productTypes || []
+      });
+    } catch (error) {
+      setTaxonomy({ genders: [], categories: [], productTypes: [] });
+      setMessage(error.response?.data?.message || 'Filters load panna mudiyala.');
+    }
   }
 
   async function loadWishlist() {
@@ -73,7 +117,12 @@ export default function Products() {
   }
 
   async function addToCart(product, size) {
-    if (!user) return navigate('/login');
+    if (!user) {
+      addGuestCartItem(product, { quantity: 1, size: size || '', color: product.color || '' });
+      setMessage(`${product.name} added to guest bag.`);
+      refreshCartCount();
+      return;
+    }
     try {
       await addCartItem({ productId: product.id, quantity: 1, size: size || '', color: product.color || '' });
       setMessage(`${product.name} added to cart.`);
@@ -86,7 +135,8 @@ export default function Products() {
   async function buyNow(product, size) {
     const checkoutPath = `/checkout/buy/${product.id}?size=${encodeURIComponent(size || '')}`;
     if (!user) {
-      setLoginPrompt({ product, checkoutPath });
+      setGuestBuyNowItem(product, { quantity: 1, size: size || '', color: product.color || '' });
+      navigate('/guest-checkout?source=buy-now');
       return;
     }
     navigate(checkoutPath);
@@ -100,13 +150,28 @@ export default function Products() {
   }
 
   function update(name, value) {
-    setQuery((current) => ({ ...current, [name]: value || undefined }));
+    setQuery((current) => {
+      const next = { ...current, [name]: value || undefined };
+      if (name === 'gender_id') {
+        delete next.gender;
+        delete next.category;
+        delete next.category_id;
+        delete next.type;
+        delete next.product_type_id;
+      }
+      if (name === 'category_id') {
+        delete next.category;
+        delete next.type;
+        delete next.product_type_id;
+      }
+      return next;
+    });
   }
 
   function clearFilters() {
     setQuery({});
     setSort('recommended');
-    navigate('/', { replace: true });
+    navigate(location.pathname === '/products' ? '/products' : '/', { replace: true });
   }
 
   function showSaleItems() {
@@ -138,7 +203,14 @@ export default function Products() {
   }
 
   const colorOptions = filters.colors?.length ? filters.colors : fallbackColorOptions;
-  const categoryChips = ['Party Wear', 'Casual Dresses', 'Ethnic Wear', 'Summer Dresses', 'Office Wear'];
+  const selectedGender = taxonomy.genders.find((gender) => String(gender.id) === String(query.gender_id));
+  const selectedGenderId = query.gender_id || (query.gender ? taxonomy.genders.find((gender) => gender.slug === query.gender || gender.name.toLowerCase() === query.gender)?.id : '');
+  const categoryOptions = taxonomy.categories.filter((category) => !selectedGenderId || String(category.gender_id) === String(selectedGenderId));
+  const productTypeOptions = query.category_id ? taxonomy.productTypes.filter((type) => (
+    (!selectedGenderId || String(type.gender_id) === String(selectedGenderId))
+    && String(type.category_id) === String(query.category_id)
+  )) : [];
+  const categoryChips = categoryOptions.length ? categoryOptions : taxonomy.categories.slice(0, 8);
   const visibleProducts = [...products]
     .filter((product) => query.availability !== 'inStock' || Number(product.stock || 0) > 0)
     .sort((a, b) => {
@@ -167,9 +239,21 @@ export default function Products() {
         />
       </label>
 
+      <FilterSection id="gender" title="Gender">
+        {taxonomy.genders.map((item) => (
+          <label key={item.id}><input type="radio" name="gender" checked={String(selectedGenderId) === String(item.id)} onChange={() => update('gender_id', item.id)} /> {item.name}</label>
+        ))}
+      </FilterSection>
+
       <FilterSection id="category" title="Category">
-        {(filters.categories || []).map((item) => (
-          <label key={item}><input type="radio" name="category" checked={query.category === item} onChange={() => update('category', item)} /> {item}</label>
+        {categoryOptions.map((item) => (
+          <label key={item.id}><input type="radio" name="category" checked={String(query.category_id) === String(item.id)} onChange={() => update('category_id', item.id)} /> {item.name}</label>
+        ))}
+      </FilterSection>
+
+      <FilterSection id="productType" title="Product Type">
+        {productTypeOptions.map((item) => (
+          <label key={item.id}><input type="radio" name="productType" checked={String(query.product_type_id) === String(item.id)} onChange={() => update('product_type_id', item.id)} /> {item.name}</label>
         ))}
       </FilterSection>
 
@@ -236,7 +320,7 @@ export default function Products() {
 
       <section className="category-chip-row">
         {categoryChips.map((chip) => (
-          <button key={chip} type="button" onClick={() => update('search', chip)}>{chip}</button>
+          <button key={chip.id} type="button" onClick={() => update('category_id', chip.id)}>{selectedGender ? '' : `${chip.gender_name ? `${chip.gender_name} / ` : ''}`}{chip.name}</button>
         ))}
       </section>
 
@@ -269,8 +353,8 @@ export default function Products() {
         <div className="listing-content">
           <div className="listing-topbar">
             <div>
-              <div className="breadcrumb-line">Home &gt; Women &gt; Dresses</div>
-              <h2>Dresses For Women <span>{visibleProducts.length} items</span></h2>
+              <div className="breadcrumb-line">Home</div>
+              <h2>All Collections <span>{visibleProducts.length} items</span></h2>
             </div>
             <div className="listing-controls">
               <button className="mobile-filter-button" type="button" onClick={() => setMobileFiltersOpen(true)}>

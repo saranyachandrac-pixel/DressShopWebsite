@@ -11,6 +11,7 @@ const {
   saveHubPincode,
   bulkUploadPincodes,
   listHubStocks,
+  listHubStockProducts,
   updateHubStock
 } = require('../controllers/hubController');
 
@@ -27,6 +28,7 @@ router.get('/hub-pincodes', asyncHandler(listHubPincodes));
 router.post('/hub-pincodes', asyncHandler(saveHubPincode));
 router.post('/hub-pincodes/bulk-upload', upload.single('file'), asyncHandler(bulkUploadPincodes));
 router.get('/hub-stocks', asyncHandler(listHubStocks));
+router.get('/hub-stock/products', asyncHandler(listHubStockProducts));
 router.post('/hub-stocks/update', asyncHandler(updateHubStock));
 
 module.exports = router;

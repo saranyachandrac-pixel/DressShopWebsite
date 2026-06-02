@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../services/api';
 import UserCoupons from '../components/UserCoupons';
+import { getProductPricing } from '../utils/pricing';
+import { getGuestCart, removeGuestCartItem, updateGuestCartItem } from '../utils/guestCart';
 
 const formatMoney = (value) => Number(value || 0).toFixed(2);
 const formatPercent = (value) => Number(value || 0).toFixed(2);
@@ -10,6 +12,16 @@ const clampDiscountPercent = (value) => Math.min(Math.max(Number(value) || 0, 0)
 const COUPON_STORAGE_KEY = 'dress_shop_coupon_code';
 
 function getCartItemTotals(item) {
+  if (item.key) {
+    const { sellingPrice, originalPrice, discountPercentage } = getProductPricing(item);
+    const quantity = Number(item.quantity || 1);
+    const discountAmount = Math.max(0, Number(originalPrice || sellingPrice) - Number(sellingPrice || 0)) * quantity;
+    return {
+      discountPercent: discountPercentage,
+      discountAmount,
+      lineTotal: Number(sellingPrice || 0) * quantity
+    };
+  }
   if (item.line_total != null) {
     return {
       discountPercent: item.discount_percent,
@@ -27,6 +39,27 @@ function getCartItemTotals(item) {
   return { discountPercent, discountAmount, lineTotal };
 }
 
+function calculateGuestSummary(items = []) {
+  const totals = items.map(getCartItemTotals);
+  const productPrice = items.reduce((sum, item) => {
+    const { sellingPrice, originalPrice } = getProductPricing(item);
+    return sum + Number(originalPrice || sellingPrice || 0) * Number(item.quantity || 1);
+  }, 0);
+  const discountAmount = totals.reduce((sum, total) => sum + Number(total.discountAmount || 0), 0);
+  const priceAfterDiscount = totals.reduce((sum, total) => sum + Number(total.lineTotal || 0), 0);
+  const tax = priceAfterDiscount * 0.05;
+  const deliveryCharge = priceAfterDiscount > 1999 || priceAfterDiscount === 0 ? 0 : 99;
+  return {
+    productPrice,
+    discountAmount,
+    discountPercent: productPrice > 0 ? (discountAmount / productPrice) * 100 : 0,
+    priceAfterDiscount,
+    tax,
+    deliveryCharge,
+    total: priceAfterDiscount + tax + deliveryCharge
+  };
+}
+
 export default function Cart() {
   const [items, setItems] = useState([]);
   const [previousMonth, setPreviousMonth] = useState({ month: '', items: [] });
@@ -37,16 +70,22 @@ export default function Cart() {
   const [appliedCoupon, setAppliedCoupon] = useState(() => localStorage.getItem(COUPON_STORAGE_KEY) || '');
   const [message, setMessage] = useState('');
   const navigate = useNavigate();
-  const { refreshCartCount } = useAuth();
+  const { user, refreshCartCount } = useAuth();
 
   useEffect(() => { refresh(); }, []);
-  useEffect(() => { loadPreviousMonthItems(); }, []);
+  useEffect(() => { if (user) loadPreviousMonthItems(); else setPreviousLoading(false); }, [user]);
 
   function previousItemKey(item) {
     return `${item.product_id}:${item.selected_size || ''}`;
   }
 
   async function refresh() {
+    if (!user) {
+      const guestItems = getGuestCart();
+      setItems(guestItems);
+      setSummary(calculateGuestSummary(guestItems));
+      return;
+    }
     const [cartRes, summaryRes] = await Promise.all([
       api.get('/cart'),
       api.get('/orders/summary', { params: { couponCode: appliedCoupon } })
@@ -119,6 +158,13 @@ export default function Cart() {
   }
 
   async function updateQty(item, quantity) {
+    if (!user) {
+      const nextItems = updateGuestCartItem(item.key, { quantity });
+      setItems(nextItems);
+      setSummary(calculateGuestSummary(nextItems));
+      refreshCartCount();
+      return;
+    }
     try {
       await api.put(`/cart/${item.id}`, { quantity });
       await Promise.all([refresh(), refreshCartCount()]);
@@ -128,6 +174,12 @@ export default function Cart() {
   }
 
   async function updateSize(item, size) {
+    if (!user) {
+      const nextItems = updateGuestCartItem(item.key, { selected_size: size, size });
+      setItems(nextItems);
+      setSummary(calculateGuestSummary(nextItems));
+      return;
+    }
     try {
       await api.put(`/cart/${item.id}`, { quantity: item.quantity, size });
       refresh();
@@ -137,12 +189,23 @@ export default function Cart() {
   }
 
   async function removeItem(id) {
+    if (!user) {
+      const nextItems = removeGuestCartItem(id);
+      setItems(nextItems);
+      setSummary(calculateGuestSummary(nextItems));
+      refreshCartCount();
+      return;
+    }
     await api.delete(`/cart/${id}`);
     await Promise.all([refresh(), refreshCartCount()]);
   }
 
   async function applyCoupon(codeOverride = couponCode) {
     setMessage('');
+    if (!user) {
+      setMessage('Coupons are available after login.');
+      return;
+    }
     try {
       const code = String(codeOverride || '').trim().toUpperCase();
       const { data } = await api.get('/orders/summary', { params: { couponCode: code } });
@@ -161,6 +224,11 @@ export default function Cart() {
     setAppliedCoupon('');
     setCouponCode('');
     localStorage.removeItem(COUPON_STORAGE_KEY);
+    if (!user) {
+      setSummary(calculateGuestSummary(items));
+      setMessage('');
+      return;
+    }
     const { data } = await api.get('/orders/summary');
     setSummary(data);
     setMessage('');
@@ -168,6 +236,10 @@ export default function Cart() {
 
   function placeOrder() {
     if (!items.length) return;
+    if (!user) {
+      navigate('/guest-checkout?source=cart');
+      return;
+    }
     navigate('/checkout/cart', { state: { source: 'cart' } });
   }
 
@@ -177,7 +249,7 @@ export default function Cart() {
         <p className="eyebrow">Cart list</p>
         <h1>Your bag</h1>
         {message && <div className="alert alert-warning">{message}</div>}
-        <section className="previous-month-panel">
+        {user && <section className="previous-month-panel">
           <div className="section-title-row">
             <div>
               <h2>Buy again from last month</h2>
@@ -219,13 +291,13 @@ export default function Cart() {
               })}
             </div>
           )}
-        </section>
+        </section>}
         {!items.length && <p>Your cart is empty.</p>}
         {items.map((item) => {
           const { discountPercent, discountAmount, lineTotal } = getCartItemTotals(item);
 
           return (
-            <div className="cart-item" key={item.id}>
+            <div className="cart-item" key={item.key || item.id}>
               <img src={item.image} alt={item.name} />
               <div>
                 <h3>{item.name}</h3>
@@ -254,7 +326,7 @@ export default function Cart() {
                 <button onClick={() => updateQty(item, Number(item.quantity || 1) - 1)} disabled={Number(item.quantity || 1) <= 1}>-</button>
                 <span>{Number(item.quantity || 1)}</span>
                 <button onClick={() => updateQty(item, Number(item.quantity || 1) + 1)} disabled={item.isOnSale}>+</button>
-                <button className="link-button" onClick={() => removeItem(item.id)}>Remove</button>
+                <button className="link-button" onClick={() => removeItem(user ? item.id : item.key)}>Remove</button>
               </div>
             </div>
           );
@@ -263,13 +335,13 @@ export default function Cart() {
 
       <aside className="checkout-panel cart-summary-card">
         <h2>Order summary</h2>
-        <UserCoupons
+        {user ? <UserCoupons
           cartTotal={Number(summary.productPrice || 0) - Number(summary.discountAmount || 0) + Number(summary.couponDiscountAmount || 0)}
           appliedCoupon={appliedCoupon}
           appliedDiscount={summary.couponDiscountAmount}
           onApply={applyCoupon}
           onRemove={removeCoupon}
-        />
+        /> : <p className="helper-text">Guest checkout does not use account coupons, wallet, or Super Coins.</p>}
         <div className="summary-line"><span>Product price</span><strong>₹{formatMoney(summary.productPrice)}</strong></div>
         <div className="summary-line discount"><span>Discount ({formatPercent(summary.discountPercent)}%)</span><strong>-₹{formatMoney(summary.discountAmount)}</strong></div>
         {Number(summary.couponDiscountAmount || 0) > 0 && (

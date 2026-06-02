@@ -9,11 +9,51 @@ datasource db {
 model Product {
   id           Int        @id @default(autoincrement())
   name         String
+  genderId     Int?       @map("gender_id")
+  categoryId   Int?       @map("category_id")
+  productTypeId Int?      @map("product_type_id")
   defaultHubId String?    @map("default_hub_id") @db.Char(36)
   defaultHub   Hub?       @relation("DefaultHubProducts", fields: [defaultHubId], references: [id])
   hubStocks    HubStock[]
 
   @@map("products")
+}
+
+model Gender {
+  id        Int      @id @default(autoincrement())
+  name      String   @db.VarChar(120)
+  slug      String   @unique @db.VarChar(140)
+  status    String   @default("ACTIVE") @db.VarChar(20)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("genders")
+}
+
+model Category {
+  id        Int      @id @default(autoincrement())
+  genderId  Int?     @map("gender_id")
+  name      String   @db.VarChar(120)
+  slug      String   @db.VarChar(140)
+  status    String   @default("ACTIVE") @db.VarChar(20)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("categories")
+}
+
+model ProductType {
+  id         Int      @id @default(autoincrement())
+  genderId   Int      @map("gender_id")
+  categoryId Int      @map("category_id")
+  name       String   @db.VarChar(120)
+  slug       String   @db.VarChar(140)
+  status     String   @default("ACTIVE") @db.VarChar(20)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@unique([genderId, categoryId, slug], map: "unique_product_type_scope")
+  @@map("product_types")
 }
 
 model Hub {

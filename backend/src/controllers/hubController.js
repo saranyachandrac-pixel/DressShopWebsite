@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { mapSaleProduct } = require('../utils/sale');
 
 const PINCODE_REGEX = /^[1-9][0-9]{5}$/;
 
@@ -185,20 +186,56 @@ const listHubStocks = async (req, res) => {
 
   const [products] = await pool.execute(
     `SELECT p.id AS productId,
+            p.id,
             p.name,
+            p.gender,
+            p.category,
+            p.product_category,
             p.brand,
             p.size,
+            COALESCE(p.image_url, p.image) AS image,
+            p.image_url AS imageUrl,
+            p.price,
+            p.mrp,
+            p.originalPrice,
+            p.discount,
+            p.discount_percent,
+            p.is_active,
             p.stock AS productStock,
             COALESCE(hi.stock_qty, hs.quantity, 0) AS quantity,
+            COALESCE(hi.stock_qty, hs.quantity, 0) AS available_qty,
             COALESCE(hs.reserved_qty, 0) AS reservedQty,
             COALESCE(hi.updated_at, hs.updated_at) AS updatedAt
      FROM products p
      LEFT JOIN hub_stocks hs ON hs.product_id = p.id AND hs.hub_id = ? AND (hs.variant_id IS NULL OR hs.variant_id = '')
      LEFT JOIN hub_inventory hi ON hi.product_id = p.id AND hi.hub_id = ? AND (hi.variant_id IS NULL OR hi.variant_id = '')
+     WHERE p.is_active = 1
      ORDER BY p.name ASC`,
     [hubId, hubId]
   );
-  res.json(products);
+  res.json(products.map((product) => ({ ...mapSaleProduct(product), productId: product.productId, quantity: product.quantity, available_qty: product.available_qty, reservedQty: product.reservedQty, productStock: product.productStock, updatedAt: product.updatedAt })));
+};
+
+const listHubStockProducts = async (req, res) => {
+  const hubId = req.query.hubId || '';
+  const params = [];
+  const hubJoin = hubId
+    ? 'LEFT JOIN hub_stocks hs ON hs.product_id = p.id AND hs.hub_id = ? AND (hs.variant_id IS NULL OR hs.variant_id = \'\')'
+    : 'LEFT JOIN hub_stocks hs ON hs.product_id = p.id AND 1 = 0';
+  if (hubId) params.push(hubId);
+
+  const [products] = await pool.execute(
+    `SELECT p.*,
+            p.id AS productId,
+            COALESCE(hs.quantity, 0) AS available_qty,
+            COALESCE(hs.reserved_qty, 0) AS reservedQty
+     FROM products p
+     ${hubJoin}
+     WHERE p.is_active = 1
+     ORDER BY p.created_at DESC, p.id DESC`,
+    params
+  );
+  res.json({ products: products.map((product) => ({ ...mapSaleProduct(product), productId: product.productId, available_qty: product.available_qty, reservedQty: product.reservedQty })) });
 };
 
 const updateHubStock = async (req, res) => {
@@ -237,5 +274,6 @@ module.exports = {
   saveHubPincode,
   bulkUploadPincodes,
   listHubStocks,
+  listHubStockProducts,
   updateHubStock
 };

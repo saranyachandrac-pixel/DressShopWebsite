@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ImagePlus, Trash2, Upload } from 'lucide-react';
 import api from '../../services/api';
+import AdminTabs from '../../components/AdminTabs';
 
 const maxLogoSize = 2 * 1024 * 1024;
 const allowedLogoTypes = ['image/jpeg', 'image/png', 'image/webp'];
@@ -114,14 +115,7 @@ export default function LogoManagement() {
     <main>
       <p className="eyebrow">Admin dashboard</p>
       <h1>Logo Management</h1>
-      <div className="admin-tabs">
-        <a href="/admin">Products & orders</a>
-        <a href="/admin/hubs">Hubs</a>
-        <a href="/admin/sale">Sale</a>
-        <a href="/admin/coupons">Coupons</a>
-        <a href="/admin/help">Help Center</a>
-        <a className="active" href="/admin/logo">Logo Management</a>
-      </div>
+      <AdminTabs />
 
       {toast && <div className={`admin-toast ${toast.type}`}>{toast.text}</div>}
 

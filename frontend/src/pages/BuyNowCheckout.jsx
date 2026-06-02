@@ -4,6 +4,7 @@ import api from '../services/api';
 import { getSavedPincode, savePincode } from '../hooks/useDeliveryDate';
 import { useAuth } from '../context/AuthContext';
 import UserCoupons from '../components/UserCoupons';
+import SuperCoinApplyBox from '../components/SuperCoinApplyBox';
 
 const blankAddress = { full_name: '', phone: '', line1: '', line2: '', city: '', state: '', pincode: '', is_default: true };
 const blankPaymentDetails = {
@@ -50,6 +51,8 @@ export default function BuyNowCheckout() {
   const { refreshCartCount } = useAuth();
   const size = searchParams.get('size') || '';
   const quantity = Math.max(1, Number(searchParams.get('quantity') || 1));
+  const isCartPath = location.pathname === '/checkout/cart';
+  const isMonthlyPath = location.pathname === '/checkout/buy-now';
   const savedMonthlyCheckout = (() => {
     try {
       return JSON.parse(localStorage.getItem('monthly_template_checkout') || '{}');
@@ -57,10 +60,12 @@ export default function BuyNowCheckout() {
       return {};
     }
   })();
-  const checkoutSessionId = searchParams.get('session') || location.state?.checkoutSessionId || savedMonthlyCheckout.checkoutSessionId || '';
-  const source = searchParams.get('source') || location.state?.source || savedMonthlyCheckout.source || '';
-  const isCartCheckout = source === 'cart' || location.pathname === '/checkout/cart';
-  const isMonthlyTemplateCheckout = source === 'monthly-template' && checkoutSessionId;
+  const checkoutSessionId = isMonthlyPath
+    ? searchParams.get('session') || location.state?.checkoutSessionId || savedMonthlyCheckout.checkoutSessionId || ''
+    : '';
+  const source = isCartPath ? 'cart' : searchParams.get('source') || location.state?.source || (isMonthlyPath ? savedMonthlyCheckout.source : '') || '';
+  const isCartCheckout = source === 'cart' || isCartPath;
+  const isMonthlyTemplateCheckout = isMonthlyPath && source === 'monthly-template' && checkoutSessionId;
   const [item, setItem] = useState(null);
   const [items, setItems] = useState([]);
   const [summary, setSummary] = useState(null);
@@ -76,15 +81,19 @@ export default function BuyNowCheckout() {
   const [message, setMessage] = useState('');
   const [couponCode, setCouponCode] = useState(() => localStorage.getItem(COUPON_STORAGE_KEY) || '');
   const [appliedCoupon, setAppliedCoupon] = useState(() => localStorage.getItem(COUPON_STORAGE_KEY) || '');
+  const [appliedSuperCoins, setAppliedSuperCoins] = useState(0);
   const payableTotal = useMemo(() => Number(summary?.total || 0), [summary]);
 
-  useEffect(() => { refresh(); }, [productId, size, quantity, checkoutSessionId]);
-  useEffect(() => { refreshSummary(paymentMethod); }, [paymentMethod, productId, size, quantity, checkoutSessionId]);
+  useEffect(() => { refresh(); }, [location.pathname, productId, size, quantity, checkoutSessionId]);
+  useEffect(() => {
+    if (step === 'payment') refreshSummary(paymentMethod);
+  }, [step, location.pathname, paymentMethod, productId, size, quantity, checkoutSessionId, appliedSuperCoins]);
   useEffect(() => { checkDelivery(); }, [selectedAddress, item?.product_id, items.length]);
 
   async function refresh() {
     setMessage('');
     if (!isCartCheckout && !isMonthlyTemplateCheckout && !productId) {
+      localStorage.removeItem('monthly_template_checkout');
       setMessage('Checkout session missing. Please start Buy Now again.');
       setStep('error');
       return;
@@ -92,10 +101,10 @@ export default function BuyNowCheckout() {
     try {
       const [checkoutRes, cartRes, addressRes, paymentRes] = await Promise.all([
         isCartCheckout
-          ? api.get('/orders/summary', { params: { paymentMethod, couponCode: appliedCoupon } })
+          ? api.get('/orders/summary', { params: { paymentMethod, couponCode: appliedCoupon, superCoins: appliedSuperCoins } })
           : isMonthlyTemplateCheckout
-            ? api.get(`/orders/monthly-template/summary/${checkoutSessionId}`, { params: { paymentMethod, couponCode: appliedCoupon } })
-            : api.get(`/orders/buy-now/summary/${productId}`, { params: { size, quantity, paymentMethod, couponCode: appliedCoupon } }),
+            ? api.get(`/orders/monthly-template/summary/${checkoutSessionId}`, { params: { paymentMethod, couponCode: appliedCoupon, superCoins: appliedSuperCoins } })
+            : api.get(`/orders/buy-now/summary/${productId}`, { params: { size, quantity, paymentMethod, couponCode: appliedCoupon, superCoins: appliedSuperCoins } }),
         isCartCheckout ? api.get('/cart') : Promise.resolve({ data: { items: [] } }),
         api.get('/addresses'),
         api.get('/payment-methods').catch(() => ({ data: [] }))
@@ -115,6 +124,9 @@ export default function BuyNowCheckout() {
         setStep('address');
       }
     } catch (error) {
+      if (isMonthlyTemplateCheckout && error.response?.status === 404) {
+        localStorage.removeItem('monthly_template_checkout');
+      }
       setMessage(error.response?.data?.message || 'Could not start fast checkout.');
       setStep('error');
     }
@@ -123,15 +135,19 @@ export default function BuyNowCheckout() {
   async function refreshSummary(nextPaymentMethod) {
     try {
       const { data } = isCartCheckout
-        ? await api.get('/orders/summary', { params: { paymentMethod: nextPaymentMethod, couponCode: appliedCoupon } })
+        ? await api.get('/orders/summary', { params: { paymentMethod: nextPaymentMethod, couponCode: appliedCoupon, superCoins: appliedSuperCoins } })
         : isMonthlyTemplateCheckout
-          ? await api.get(`/orders/monthly-template/summary/${checkoutSessionId}`, { params: { paymentMethod: nextPaymentMethod, couponCode: appliedCoupon } })
-          : await api.get(`/orders/buy-now/summary/${productId}`, { params: { size, quantity, paymentMethod: nextPaymentMethod, couponCode: appliedCoupon } });
+          ? await api.get(`/orders/monthly-template/summary/${checkoutSessionId}`, { params: { paymentMethod: nextPaymentMethod, couponCode: appliedCoupon, superCoins: appliedSuperCoins } })
+          : await api.get(`/orders/buy-now/summary/${productId}`, { params: { size, quantity, paymentMethod: nextPaymentMethod, couponCode: appliedCoupon, superCoins: appliedSuperCoins } });
       setSummary(isCartCheckout ? data : data.summary);
       const checkoutItems = isCartCheckout ? items : data.items || (data.item ? [data.item] : []);
       setItems(checkoutItems);
       setItem(data.item || checkoutItems[0] || null);
     } catch (error) {
+      if (isMonthlyTemplateCheckout && error.response?.status === 404) {
+        localStorage.removeItem('monthly_template_checkout');
+        setStep('error');
+      }
       setMessage(error.response?.data?.message || 'Could not update order summary.');
     }
   }
@@ -141,10 +157,10 @@ export default function BuyNowCheckout() {
     try {
       const code = String(codeOverride || '').trim().toUpperCase();
       const { data } = isCartCheckout
-        ? await api.get('/orders/summary', { params: { paymentMethod, couponCode: code } })
+        ? await api.get('/orders/summary', { params: { paymentMethod, couponCode: code, superCoins: appliedSuperCoins } })
         : isMonthlyTemplateCheckout
-          ? await api.get(`/orders/monthly-template/summary/${checkoutSessionId}`, { params: { paymentMethod, couponCode: code } })
-          : await api.get(`/orders/buy-now/summary/${productId}`, { params: { size, quantity, paymentMethod, couponCode: code } });
+          ? await api.get(`/orders/monthly-template/summary/${checkoutSessionId}`, { params: { paymentMethod, couponCode: code, superCoins: appliedSuperCoins } })
+          : await api.get(`/orders/buy-now/summary/${productId}`, { params: { size, quantity, paymentMethod, couponCode: code, superCoins: appliedSuperCoins } });
       const nextSummary = isCartCheckout ? data : data.summary;
       setSummary(nextSummary);
       const checkoutItems = isCartCheckout ? items : data.items || (data.item ? [data.item] : []);
@@ -165,15 +181,20 @@ export default function BuyNowCheckout() {
     setCouponCode('');
     localStorage.removeItem(COUPON_STORAGE_KEY);
     const { data } = isCartCheckout
-      ? await api.get('/orders/summary', { params: { paymentMethod } })
+      ? await api.get('/orders/summary', { params: { paymentMethod, superCoins: appliedSuperCoins } })
       : isMonthlyTemplateCheckout
-        ? await api.get(`/orders/monthly-template/summary/${checkoutSessionId}`, { params: { paymentMethod } })
-        : await api.get(`/orders/buy-now/summary/${productId}`, { params: { size, quantity, paymentMethod } });
+        ? await api.get(`/orders/monthly-template/summary/${checkoutSessionId}`, { params: { paymentMethod, superCoins: appliedSuperCoins } })
+        : await api.get(`/orders/buy-now/summary/${productId}`, { params: { size, quantity, paymentMethod, superCoins: appliedSuperCoins } });
     setSummary(isCartCheckout ? data : data.summary);
     const checkoutItems = isCartCheckout ? items : data.items || (data.item ? [data.item] : []);
     setItems(checkoutItems);
     setItem(data.item || checkoutItems[0] || null);
     setMessage('');
+  }
+
+  function applySuperCoinDiscount(coins) {
+    setAppliedSuperCoins(Number(coins || 0));
+    setMessage(Number(coins || 0) > 0 ? 'Super Coins applied.' : '');
   }
 
   async function checkDelivery() {
@@ -293,10 +314,10 @@ export default function BuyNowCheckout() {
     if (paymentError) return setMessage(paymentError);
     try {
       const payload = isCartCheckout
-        ? { addressId: selectedAddress, paymentMethod, paymentDetails, couponCode: appliedCoupon }
+        ? { addressId: selectedAddress, paymentMethod, paymentDetails, couponCode: appliedCoupon, superCoins: appliedSuperCoins }
         : isMonthlyTemplateCheckout
-          ? { checkoutSessionId, addressId: selectedAddress, paymentMethod, paymentDetails, couponCode: appliedCoupon }
-          : { productId, addressId: selectedAddress, paymentMethod, paymentDetails, size, quantity, couponCode: appliedCoupon };
+          ? { checkoutSessionId, addressId: selectedAddress, paymentMethod, paymentDetails, couponCode: appliedCoupon, superCoins: appliedSuperCoins }
+          : { productId, addressId: selectedAddress, paymentMethod, paymentDetails, size, quantity, couponCode: appliedCoupon, superCoins: appliedSuperCoins };
       const { data } = await api.post(isCartCheckout ? '/orders' : isMonthlyTemplateCheckout ? '/orders/monthly-template/checkout' : '/orders/buy-now', payload);
       if (isMonthlyTemplateCheckout) localStorage.removeItem('monthly_template_checkout');
       if (isCartCheckout) await refreshCartCount();
@@ -309,6 +330,23 @@ export default function BuyNowCheckout() {
   const selectedAddressDetails = addresses.find((x) => String(x.id) === String(selectedAddress));
 
   if (step === 'loading') return <main><p className="helper-text">Preparing fast checkout...</p></main>;
+
+  if (step === 'error') {
+    return (
+      <main className="buy-now-page">
+        <div className="alert alert-warning">{message || 'Checkout session missing. Please start checkout again.'}</div>
+        <section className="checkout-section checkout-recovery">
+          <h1>Start checkout again</h1>
+          <p className="helper-text">Your previous checkout session is no longer active.</p>
+          <div className="checkout-recovery-actions">
+            <button className="btn btn-dark" type="button" onClick={() => navigate('/cart')}>Go to cart</button>
+            <button className="btn btn-outline-dark" type="button" onClick={() => navigate('/monthly-template')}>Monthly template</button>
+            <button className="continue-shop-btn" type="button" onClick={() => navigate('/')}>Continue shopping</button>
+          </div>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="buy-now-page">
@@ -457,15 +495,26 @@ export default function BuyNowCheckout() {
             onApply={applyCoupon}
             onRemove={removeCoupon}
           />
+          <SuperCoinApplyBox
+            orderAmount={Number(summary?.totalBeforeCoins || summary?.total || 0)}
+            appliedCoins={summary?.superCoinsRedeemed || appliedSuperCoins}
+            appliedDiscount={summary?.superCoinDiscount}
+            coinsToEarn={summary?.coinsToEarn}
+            onApplied={applySuperCoinDiscount}
+          />
           <div className="summary-line"><span>Product price</span><strong>Rs.{formatMoney(summary?.productPrice)}</strong></div>
           <div className="summary-line discount"><span>Discount ({formatPercent(summary?.discountPercent)}%)</span><strong>-Rs.{formatMoney(summary?.discountAmount)}</strong></div>
           {Number(summary?.couponDiscountAmount || 0) > 0 && (
             <div className="summary-line discount"><span>Coupon {summary?.couponCode}</span><strong>-Rs.{formatMoney(summary?.couponDiscountAmount)}</strong></div>
           )}
+          {Number(summary?.superCoinDiscount || 0) > 0 && (
+            <div className="summary-line discount"><span>Super Coins</span><strong>-Rs.{formatMoney(summary?.superCoinDiscount)}</strong></div>
+          )}
           <div className="summary-line"><span>Subtotal</span><strong>Rs.{formatMoney(summary?.priceAfterDiscount)}</strong></div>
           <div className="summary-line"><span>Tax</span><strong>Rs.{formatMoney(summary?.tax)}</strong></div>
           <div className="summary-line"><span>Delivery</span><strong>{summary?.deliveryCharge > 0 ? `Rs.${formatMoney(summary.deliveryCharge)}` : 'FREE'}</strong></div>
           {paymentMethod === 'Cash On Delivery' && <div className="summary-line"><span>Cash on delivery charge</span><strong>Rs.{formatMoney(CASH_ON_DELIVERY_CHARGE)}</strong></div>}
+          {Number(summary?.coinsToEarn || 0) > 0 && <div className="summary-line"><span>You will earn</span><strong>{summary.coinsToEarn} coins</strong></div>}
           <div className="summary-line total"><span>Total</span><strong>Rs.{formatMoney(payableTotal)}</strong></div>
           <button className="btn btn-dark w-100" disabled={step !== 'payment'} onClick={placeOrder}>Pay Rs.{formatMoney(payableTotal)}</button>
           <button className="continue-shop-btn" type="button" onClick={() => navigate('/')}>Continue To Shop</button>

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import api from '../services/api';
 
 function getPaymentDetails(order) {
@@ -12,6 +12,61 @@ function getPaymentDetails(order) {
   }
 }
 
+function formatDate(value) {
+  if (!value) return '';
+  return new Date(value).toLocaleDateString('en-GB');
+}
+
+function formatDateTime(value) {
+  if (!value) return '';
+  return new Date(value).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function formatMoney(value) {
+  return Number(value || 0).toFixed(2);
+}
+
+function trackingEventsFor(order) {
+  return order?.tracking_events || [];
+}
+
+function canShowReturn(item) {
+  const itemStatus = String(item.item_status || '').toUpperCase();
+  const requestStatus = String(item.request_status || '').toUpperCase();
+  const refundStatus = String(item.post_delivery_refund_status || '').toUpperCase();
+  return Boolean(item.canReturn)
+    && !['CANCELLED', 'RETURNED', 'REFUNDED'].includes(itemStatus)
+    && !['PENDING', 'APPROVED', 'RETURN_PICKED_UP', 'RETURN_COMPLETED', 'REFUNDED'].includes(requestStatus)
+    && !['PROCESSING', 'COMPLETED', 'REFUNDED'].includes(refundStatus);
+}
+
+function TrackingTimeline({ events = [] }) {
+  return (
+    <div className="order-tracking-timeline">
+      {events.map((event) => (
+        <div className={`order-tracking-event ${event.status}`} key={`${event.type}-${event.title}`}>
+          <span className="order-tracking-dot" />
+          <div>
+            <div className="order-tracking-title-row">
+              <strong>{event.title}</strong>
+              {(event.date_time || event.event_date) && <small>{formatDateTime(event.date_time || event.event_date)}</small>}
+            </div>
+            {event.description && <p>{event.description}</p>}
+            {event.refund && (event.refund.amount || event.refund.paymentMethod || event.refund.transactionId || event.refund.completedAt) && (
+              <div className="refund-detail-grid">
+                {event.refund.amount != null && <span>Refund amount: Rs.{formatMoney(event.refund.amount)}</span>}
+                {event.refund.paymentMethod && <span>Method: {event.refund.paymentMethod}</span>}
+                {event.refund.transactionId && <span>Transaction ID: {event.refund.transactionId}</span>}
+                {event.refund.completedAt && <span>Completed: {formatDateTime(event.refund.completedAt)}</span>}
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function OrderDetail() {
   const [order, setOrder] = useState(null);
   const [cancelItem, setCancelItem] = useState(null);
@@ -20,24 +75,32 @@ export default function OrderDetail() {
   const [postDeliveryForm, setPostDeliveryForm] = useState({ requestType: 'RETURN', reason: '' });
   const [reviewItem, setReviewItem] = useState(null);
   const [reviewForm, setReviewForm] = useState({ rating: 5, reviewText: '' });
+  const [replacementEligibility, setReplacementEligibility] = useState({});
   const [message, setMessage] = useState('');
   const { id } = useParams();
+  const navigate = useNavigate();
 
   useEffect(() => { loadOrder(); }, [id]);
 
   async function loadOrder() {
-    const { data } = await api.get(`/orders/${id}`);
+    const [{ data }, eligibilityRes] = await Promise.all([
+      api.get(`/orders/${id}`),
+      api.get(`/orders/${id}/replacement-eligibility`).catch(() => ({ data: { items: [] } }))
+    ]);
     setOrder(data);
+    setReplacementEligibility(Object.fromEntries((eligibilityRes.data.items || []).map((item) => [item.orderItemId, item])));
   }
 
   function canCancel(item) {
-    const orderStatus = String(order.delivery_status || '').toUpperCase();
-    const itemStatus = String(item.item_status || 'ACTIVE').toUpperCase();
-    return ['PENDING', 'CONFIRMED', 'PROCESSING', 'PLACED', 'PACKED'].includes(orderStatus) && itemStatus !== 'CANCELLED';
+    return Boolean(item.canCancel);
   }
 
   function canPostDeliveryRequest(item) {
-    return order.delivery_status === 'DELIVERED' && !item.post_delivery_request_id && String(item.item_status || 'ACTIVE') !== 'CANCELLED';
+    return canShowReturn(item);
+  }
+
+  function canReplace(item) {
+    return Boolean(item.canReplace);
   }
 
   function canReview(item) {
@@ -62,8 +125,8 @@ export default function OrderDetail() {
     e.preventDefault();
     if (!postDeliveryForm.reason.trim()) return setMessage('Request reason is required.');
     try {
-      await api.post(`/post-delivery/orders/${order.id}/items/${postDeliveryItem.id}/request`, postDeliveryForm);
-      setMessage('Return/cancel request submitted successfully.');
+      const { data } = await api.post(`/post-delivery/orders/${order.id}/items/${postDeliveryItem.id}/request`, postDeliveryForm);
+      setMessage(data.message || 'Request submitted successfully.');
       setPostDeliveryItem(null);
       setPostDeliveryForm({ requestType: 'RETURN', reason: '' });
       await loadOrder();
@@ -75,8 +138,8 @@ export default function OrderDetail() {
   async function submitReview(e) {
     e.preventDefault();
     try {
-      await api.post(`/post-delivery/orders/${order.id}/items/${reviewItem.id}/review`, reviewForm);
-      setMessage('Review submitted successfully.');
+      const { data } = await api.post(`/post-delivery/orders/${order.id}/items/${reviewItem.id}/review`, reviewForm);
+      setMessage(data.message || 'Review submitted successfully.');
       setReviewItem(null);
       setReviewForm({ rating: 5, reviewText: '' });
       await loadOrder();
@@ -87,6 +150,9 @@ export default function OrderDetail() {
 
   if (!order) return <main>Loading...</main>;
   const paymentDetails = getPaymentDetails(order);
+  const isDelivered = String(order.delivery_status || '').toUpperCase() === 'DELIVERED';
+  const superCoinEligibleAt = order.superCoinEligibleAt || order.super_coin_eligible_at;
+  const superCoinAwarded = Boolean(order.superCoinAwarded || order.super_coin_awarded);
 
   return (
     <main className="split-page">
@@ -94,9 +160,7 @@ export default function OrderDetail() {
         {message && <div className="alert alert-info">{message}</div>}
         <p className="eyebrow">Tracking status</p>
         <h1>{order.order_number}</h1>
-        <div className="tracking-card">
-          {['PLACED', 'PACKED', 'SHIPPED', 'DELIVERED'].map((step) => <span className={step === order.delivery_status ? 'active' : ''} key={step}>{step}</span>)}
-        </div>
+        <TrackingTimeline events={trackingEventsFor(order)} />
         {order.items.map((item) => (
           <div className="cart-item" key={item.id}>
             <img src={item.image} alt={item.product_name} />
@@ -111,6 +175,15 @@ export default function OrderDetail() {
                 </p>
               )}
               {item.review_id && <p className="helper-text">Your rating: {'★'.repeat(Number(item.rating || 0))} {item.review_text}</p>}
+              {replacementEligibility[item.id] && (
+                <p className={replacementEligibility[item.id].allowed ? 'replacement-valid-text' : 'helper-text'}>
+                  {replacementEligibility[item.id].allowed
+                    ? `Replacement valid until ${new Date(replacementEligibility[item.id].replacementLastDate).toLocaleDateString('en-GB')}`
+                    : replacementEligibility[item.id].message}
+                </p>
+              )}
+              {item.canReturn && item.returnWindowEndsAt && <p className="helper-text">Return valid until {formatDate(item.returnWindowEndsAt)}</p>}
+              {item.canReplace && item.replacementWindowEndsAt && <p className="helper-text">Replacement valid until {formatDate(item.replacementWindowEndsAt)}</p>}
               <strong>Rs.{Number(item.price).toFixed(2)}</strong>
             </div>
             {canCancel(item) && (
@@ -120,7 +193,15 @@ export default function OrderDetail() {
             )}
             {canPostDeliveryRequest(item) && (
               <button className="btn btn-outline-dark btn-sm" type="button" onClick={() => setPostDeliveryItem(item)}>
-                Return / Cancel Request
+                Return
+              </button>
+            )}
+            {canReplace(item) && (
+              <button className="btn btn-dark btn-sm" type="button" onClick={() => {
+                setPostDeliveryItem(item);
+                setPostDeliveryForm({ requestType: 'REPLACEMENT', reason: '' });
+              }}>
+                Replace
               </button>
             )}
             {canReview(item) && (
@@ -166,6 +247,16 @@ export default function OrderDetail() {
         )}
         <h2>Total</h2>
         <strong className="big-price">Rs.{Number(order.total_amount).toFixed(2)}</strong>
+        {isDelivered && (
+          <div className="alert alert-info">
+            {superCoinAwarded
+              ? 'Super Coins credited after delivery.'
+              : superCoinEligibleAt
+                ? `Super Coins will be credited after replacement period ends on ${formatDate(superCoinEligibleAt)}.`
+                : 'Super Coins credited after delivery.'}
+          </div>
+        )}
+        <button className="continue-shop-btn" type="button" onClick={() => navigate('/')}>Continue To Shop</button>
       </aside>
       {cancelItem && (
         <div className="size-modal-overlay" onClick={() => setCancelItem(null)}>
@@ -197,8 +288,8 @@ export default function OrderDetail() {
             <label>
               Request type
               <select value={postDeliveryForm.requestType} onChange={(e) => setPostDeliveryForm({ ...postDeliveryForm, requestType: e.target.value })}>
-                <option value="RETURN">Return</option>
-                <option value="CANCEL">Cancel</option>
+                {postDeliveryItem.canReturn && <option value="RETURN">Return</option>}
+                {postDeliveryItem.canReplace && <option value="REPLACEMENT">Replacement</option>}
               </select>
             </label>
             <label>

@@ -1,8 +1,21 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Heart, Star } from 'lucide-react';
+import { getProductPricing, money } from '../utils/pricing';
 
-const money = (value) => Number(value || 0).toFixed(2);
+const placeholders = {
+  women: 'https://images.unsplash.com/photo-1483985988355-763728e1935b?auto=format&fit=crop&w=900&q=80',
+  kids: 'https://images.unsplash.com/photo-1519238263530-99bdd11df2ea?auto=format&fit=crop&w=900&q=80',
+  men: 'https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?auto=format&fit=crop&w=900&q=80',
+  unisex: 'https://images.unsplash.com/photo-1523381294911-8d3cead13475?auto=format&fit=crop&w=900&q=80'
+};
+
+function productImage(product) {
+  const dbImage = product.image_url || product.image || product.imageUrl;
+  if (dbImage) return dbImage;
+  const gender = String(product.gender || '').toLowerCase();
+  return placeholders[gender] || placeholders.unisex;
+}
 
 export default function ProductCard({ product, onAdd, onBuy, onWishlist, wishlistSaved = false }) {
   const out = product.stock <= 0;
@@ -14,16 +27,16 @@ export default function ProductCard({ product, onAdd, onBuy, onWishlist, wishlis
     ? ['1-2Y', '3-4Y', '5-6Y', '7-8Y', '9-10Y', '11-12Y']
     : ['M', 'L', 'XL', 'XXL'];
 
-  const discountPercent = Math.min(Math.max(Number(product.discount) || 0, 0), 100);
   const isOnSale = Boolean(product.isOnSale);
-  const originalPrice = Number(product.originalPrice || product.price || 0);
-  const salePrice = Number(product.salePrice || product.effectivePrice || product.price || 0);
-  const discountedPrice = isOnSale ? salePrice : Number(product.price) * (1 - discountPercent / 100);
+  const { sellingPrice, originalPrice, discountPercentage } = getProductPricing(product);
+  const showDiscount = discountPercentage > 0 && originalPrice > sellingPrice;
   const discountText = product.saleType === 'percentage'
     ? `Save ${money(product.saleValue).replace(/\.00$/, '')}%`
     : product.saleType === 'flat'
       ? `Save Rs.${money(product.saleValue).replace(/\.00$/, '')}`
-      : 'Buy 1 Get 1 Free';
+      : product.saleType === 'bogo'
+        ? 'Buy 1 Get 1 Free'
+        : `${money(discountPercentage).replace(/\.00$/, '')}% off`;
 
   function handleAddClick() {
     setPendingAction('add');
@@ -50,7 +63,7 @@ export default function ProductCard({ product, onAdd, onBuy, onWishlist, wishlis
   return (
     <>
       <article className="product-card">
-        <div className="product-image" style={{ backgroundImage: `url(${product.image})` }}>
+        <div className="product-image" style={{ backgroundImage: `url(${productImage(product)})` }}>
           <span className={isOnSale ? 'sale-badge' : 'sale-badge trending'}>{isOnSale ? 'SALE' : 'TRENDING'}</span>
           {onWishlist && (
             <button
@@ -77,12 +90,11 @@ export default function ProductCard({ product, onAdd, onBuy, onWishlist, wishlis
           <div className="meta-row"><span>{product.category}</span><span>{product.size}</span><span>{product.color}</span></div>
           <div className="price-row">
             <div className="price-section">
-              <strong className={isOnSale ? 'sale-price' : ''}>Rs.{money(discountedPrice)}</strong>
-              {isOnSale && <span className="discount-badge">{discountText}</span>}
+              <strong className={showDiscount || isOnSale ? 'sale-price' : ''}>Rs.{money(sellingPrice)}</strong>
+              {(showDiscount || isOnSale) && <span className="discount-badge">{discountText}</span>}
               {isOnSale && <span className="sale-limit-text">Limit 1 qty per customer</span>}
-              {!isOnSale && discountPercent > 0 && <span className="discount-badge">{discountPercent.toFixed(2)}% off</span>}
-              {(isOnSale || discountPercent > 0) && (
-                <small className="original-price">Rs.{money(isOnSale ? originalPrice : product.price)}</small>
+              {showDiscount && (
+                <small className="original-price">Rs.{money(originalPrice)}</small>
               )}
             </div>
             <div className="card-action-row">

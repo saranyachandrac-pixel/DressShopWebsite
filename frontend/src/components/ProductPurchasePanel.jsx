@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Heart, Minus, Package, Plus, ShoppingCart, Star, Truck, Zap } from 'lucide-react';
 import useDeliveryDate, { getSavedPincode } from '../hooks/useDeliveryDate';
+import { getProductPricing, money } from '../utils/pricing';
 
-const money = (value) => Number(value || 0).toFixed(0);
 const PINCODE_REGEX = /^[1-9][0-9]{5}$/;
 
 function formatDeliveryDate(value) {
@@ -42,13 +42,10 @@ export default function ProductPurchasePanel({
 
   const outOfStock = Number(product?.stock || 0) <= 0;
   const maxQuantity = product?.isOnSale ? 1 : Math.max(1, Number(product?.stock || 1));
-  const price = Number(
-    product?.isOnSale
-      ? product?.salePrice ?? product?.effectivePrice ?? product?.price ?? 0
-      : product?.effectivePrice ?? product?.price ?? 0
-  );
-  const oldPrice = Number(product?.originalPrice || product?.price || 0);
-  const showOldPrice = product?.isOnSale || oldPrice > price;
+  const { sellingPrice, originalPrice, discountPercentage } = getProductPricing(product);
+  const price = Number(sellingPrice || 0);
+  const oldPrice = Number(originalPrice || price || 0);
+  const showOldPrice = oldPrice > price;
   const rating = product?.rating || product?.averageRating || 5;
   const deliveryLabel = result?.available
     ? customerDeliveryText(result)
@@ -130,6 +127,11 @@ export default function ProductPurchasePanel({
         {showOldPrice && (
           <span className="pb-1 text-lg font-bold text-stone-400 line-through">
             ₹{money(oldPrice * quantity)}
+          </span>
+        )}
+        {discountPercentage > 0 && showOldPrice && (
+          <span className="pb-1 text-sm font-black text-emerald-700">
+            {money(discountPercentage).replace(/\.00$/, '')}% off
           </span>
         )}
         {quantity > 1 && (

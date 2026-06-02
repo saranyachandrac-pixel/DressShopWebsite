@@ -5,6 +5,7 @@ const { checkDelivery } = require('../controllers/deliveryController');
 const router = express.Router();
 
 router.post('/check', asyncHandler(checkDelivery));
+router.get('/check', asyncHandler(checkDelivery));
 router.get('/estimate', asyncHandler(checkDelivery));
 
 module.exports = router;

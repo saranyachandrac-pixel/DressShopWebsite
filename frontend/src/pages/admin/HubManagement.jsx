@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import api from '../../services/api';
+import AdminTabs from '../../components/AdminTabs';
 
 const emptyHub = { name: '', code: '', address: '', area: '', city: '', state: '', pincode: '', latitude: '', longitude: '', isActive: true };
 const emptyPincode = { hubId: '', pincode: '', deliveryDaysMin: '2', deliveryDaysMax: '3', codAvailable: true, isPrimary: true };
@@ -13,14 +14,36 @@ export default function HubManagement() {
   const [pincodeForm, setPincodeForm] = useState(emptyPincode);
   const [editingId, setEditingId] = useState('');
   const [selectedHubId, setSelectedHubId] = useState('');
+  const [stockSearch, setStockSearch] = useState('');
+  const [savingStockId, setSavingStockId] = useState('');
   const [csv, setCsv] = useState('hubCode,pincode,deliveryDaysMin,deliveryDaysMax,codAvailable\nTPJ001,620002,2,3,true');
   const [csvResults, setCsvResults] = useState([]);
   const [message, setMessage] = useState('');
   const selectedHub = useMemo(() => hubs.find((hub) => hub.id === selectedHubId), [hubs, selectedHubId]);
   const hubCodes = useMemo(() => hubs.map((hub) => hub.code).filter(Boolean), [hubs]);
+  const filteredStocks = useMemo(() => {
+    const term = stockSearch.trim().toLowerCase();
+    if (!term) return stocks;
+    return stocks.filter((product) => [product.name, product.brand, product.size, selectedHub?.pincode]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(term)));
+  }, [stocks, stockSearch, selectedHub]);
+  const stockSummary = useMemo(() => ({
+    totalProducts: filteredStocks.length,
+    totalAvailable: filteredStocks.reduce((sum, product) => sum + Number(stockDrafts[product.productId] ?? product.quantity ?? 0), 0),
+    totalReserved: filteredStocks.reduce((sum, product) => sum + Number(product.reservedQty || 0), 0)
+  }), [filteredStocks, stockDrafts]);
 
   useEffect(() => { refresh(); }, []);
   useEffect(() => { if (selectedHubId) loadStocks(selectedHubId); }, [selectedHubId]);
+  useEffect(() => {
+    function refreshStocks() {
+      if (selectedHubId) loadStocks(selectedHubId);
+    }
+
+    window.addEventListener('product-catalog-updated', refreshStocks);
+    return () => window.removeEventListener('product-catalog-updated', refreshStocks);
+  }, [selectedHubId]);
 
   async function refresh() {
     const [hubRes, pincodeRes] = await Promise.all([
@@ -99,31 +122,28 @@ export default function HubManagement() {
   }
 
   async function updateStock(product, quantity) {
+    setSavingStockId(product.productId);
     try {
       await api.post('/admin/hub-stocks/update', {
         hubId: selectedHubId,
         productId: product.productId,
         quantity: Math.max(0, Number(quantity || 0))
       });
-      setMessage(`${product.name} stock updated for ${selectedHub?.code || 'selected hub'}.`);
+      setMessage('Stock updated successfully.');
       await loadStocks(selectedHubId);
     } catch (error) {
-      setMessage(error.response?.data?.message || 'Could not update stock.');
+      setMessage(error.response?.data?.message || 'Failed to update stock.');
+    } finally {
+      setSavingStockId('');
     }
   }
 
   return (
-    <main>
+    <main className="hub-management-page">
       <p className="eyebrow">Admin dashboard</p>
       <h1>Hub Management</h1>
       {message && <div className="alert alert-info">{message}</div>}
-      <div className="admin-tabs">
-        <a href="/admin">Products & orders</a>
-        <a className="active" href="/admin/hubs">Hubs</a>
-        <a href="/admin/sale">Sale</a>
-        <a href="/admin/coupons">Coupons</a>
-        <a href="/admin/logo">Logo Management</a>
-      </div>
+      <AdminTabs />
 
       <section className="hub-admin-layout">
         <form className="admin-form" onSubmit={saveHub}>
@@ -211,45 +231,96 @@ export default function HubManagement() {
           </div>
         </div>
 
-        <div className="table-card hub-stock-card">
-          <div className="section-title-row">
-            <h2>Hub stock</h2>
-            <select value={selectedHubId} onChange={(e) => setSelectedHubId(e.target.value)}>
-              {hubs.map((hub) => (
-                <option key={hub.id} value={hub.id}>
-                  {hub.code} - {hub.city || hub.name} - {hub.pincode}
-                </option>
-              ))}
-            </select>
+        <div className="hub-stock-card">
+          <div className="hub-stock-toolbar">
+            <div>
+              <p className="eyebrow">Inventory control</p>
+              <h2>Hub stock</h2>
+            </div>
+            <div className="hub-stock-controls">
+              <input
+                className="hub-stock-search"
+                value={stockSearch}
+                onChange={(event) => setStockSearch(event.target.value)}
+                placeholder="Search products, brand, size"
+              />
+              <select value={selectedHubId} onChange={(e) => setSelectedHubId(e.target.value)}>
+                {hubs.map((hub) => (
+                  <option key={hub.id} value={hub.id}>
+                    {hub.code} - {hub.city || hub.name} - {hub.pincode}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
           {selectedHub && (
             <p className="helper-text">
               Maintain product stock for {selectedHub.name}, {selectedHub.city} - {selectedHub.pincode}. Reserved quantity is orders placed but not shipped.
             </p>
           )}
-          <table className="table align-middle">
-            <thead><tr><th>Product</th><th>Branch pincode</th><th>Available qty</th><th>Reserved</th><th>Update</th></tr></thead>
-            <tbody>{stocks.map((product) => (
-              <tr key={product.productId}>
-                <td><strong>{product.name}</strong><br /><small>{product.brand} / {product.size}</small></td>
-                <td>{selectedHub?.pincode}</td>
-                <td>
-                  <input
-                    type="number"
-                    min="0"
-                    value={stockDrafts[product.productId] ?? ''}
-                    onChange={(e) => setStockDrafts({ ...stockDrafts, [product.productId]: e.target.value })}
-                  />
-                </td>
-                <td>{product.reservedQty}</td>
-                <td>
-                  <button className="btn btn-dark btn-sm" type="button" onClick={() => updateStock(product, stockDrafts[product.productId])}>
-                    Save
-                  </button>
-                </td>
-              </tr>
-            ))}</tbody>
-          </table>
+          <div className="hub-stock-summary">
+            <article>
+              <span>Total Products</span>
+              <strong>{stockSummary.totalProducts}</strong>
+            </article>
+            <article>
+              <span>Total Available Qty</span>
+              <strong>{stockSummary.totalAvailable}</strong>
+            </article>
+            <article>
+              <span>Reserved Qty</span>
+              <strong>{stockSummary.totalReserved}</strong>
+            </article>
+          </div>
+          <div className="hub-stock-table-wrapper">
+            <table className="hub-stock-table">
+              <thead>
+                <tr>
+                  <th>Image</th>
+                  <th>Product</th>
+                  <th>Brand/Size</th>
+                  <th>Branch Pincode</th>
+                  <th>Available Qty</th>
+                  <th>Reserved</th>
+                  <th className="hub-stock-action-col">Action</th>
+                </tr>
+              </thead>
+              <tbody>{filteredStocks.map((product) => (
+                <tr key={product.productId}>
+                  <td>
+                    <img
+                      className="hub-stock-product-image"
+                      src={product.image || product.imageUrl || 'https://images.unsplash.com/photo-1523381294911-8d3cead13475?auto=format&fit=crop&w=300&q=80'}
+                      alt={product.name}
+                    />
+                  </td>
+                  <td><strong>{product.name}</strong></td>
+                  <td><span>{product.brand || 'DressShop'}</span><small>{product.size || 'Standard'}</small></td>
+                  <td>{selectedHub?.pincode || '-'}</td>
+                  <td>
+                    <input
+                      className="hub-stock-qty-input"
+                      type="number"
+                      min="0"
+                      value={stockDrafts[product.productId] ?? ''}
+                      onChange={(e) => setStockDrafts({ ...stockDrafts, [product.productId]: e.target.value })}
+                    />
+                  </td>
+                  <td><span className="hub-stock-reserved-badge">{product.reservedQty}</span></td>
+                  <td className="hub-stock-action-col">
+                    <button
+                      className="hub-stock-save-btn"
+                      type="button"
+                      disabled={savingStockId === product.productId}
+                      onClick={() => updateStock(product, stockDrafts[product.productId])}
+                    >
+                      {savingStockId === product.productId ? 'Saving...' : 'Save'}
+                    </button>
+                  </td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
         </div>
       </section>
     </main>

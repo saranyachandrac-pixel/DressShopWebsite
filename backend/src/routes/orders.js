@@ -6,9 +6,20 @@ const { orderNumber, money } = require('../utils/format');
 const { normalizeMobileNumber, isValidMobileNumber } = require('../utils/mobile');
 const { savePaymentMethod } = require('./paymentMethods');
 const { mapSaleProduct } = require('../utils/sale');
+const { buildTrackingEvents } = require('../utils/trackingEvents');
 const { reserveHubStock } = require('../controllers/deliveryController');
 const { validateCouponForOrder, normalizeCouponCode } = require('../controllers/couponController');
 const { payOrder, refundOrder } = require('../services/walletService');
+const {
+  createOrderDetail,
+  handleDeliveredOrderSuperCoins,
+  processPendingSuperCoinRewards,
+  getEarnEstimate,
+  redeemForOrder,
+  reverseOrderCoins,
+  validateRedemption
+} = require('../services/superCoinService');
+const { getOrderReplacementEligibility, getProductReplacementPolicy } = require('../services/replacementService');
 
 const router = express.Router();
 router.use(authenticate);
@@ -71,7 +82,7 @@ async function getMonthlyCheckoutSession(connection, userId, sessionId) {
   };
 }
 
-async function calculateSummary(items, paymentMethod = '', couponCode = '', connection = pool) {
+async function calculateSummary(items, paymentMethod = '', couponCode = '', connection = pool, options = {}) {
   const saleAwareItems = items.map((item) => mapSaleProduct(item));
   const productPrice = money(saleAwareItems.reduce((sum, item) => sum + Number(item.originalPrice || item.price) * item.quantity, 0));
   const discountAmount = money(saleAwareItems.reduce((sum, item) => {
@@ -92,7 +103,21 @@ async function calculateSummary(items, paymentMethod = '', couponCode = '', conn
   const tax = money(priceAfterDiscount * 0.05);
   const deliveryCharge = priceAfterDiscount > 1999 || priceAfterDiscount === 0 ? 0 : 99;
   const cashOnDeliveryCharge = paymentMethod === 'Cash On Delivery' && priceAfterDiscount > 0 ? CASH_ON_DELIVERY_CHARGE : 0;
-  const total = money(priceAfterDiscount + tax + deliveryCharge + cashOnDeliveryCharge);
+  const totalBeforeCoins = money(priceAfterDiscount + tax + deliveryCharge + cashOnDeliveryCharge);
+  let superCoinDiscount = 0;
+  let superCoinsRedeemed = 0;
+  if (options.userId && Number(options.superCoinsToApply || 0) > 0) {
+    const redemption = await validateRedemption(connection, options.userId, totalBeforeCoins, options.superCoinsToApply);
+    if (redemption.error) {
+      const error = new Error(redemption.error);
+      error.status = 400;
+      throw error;
+    }
+    superCoinDiscount = Math.min(totalBeforeCoins, money(redemption.value || 0));
+    superCoinsRedeemed = Number(redemption.coins || 0);
+  }
+  const total = money(totalBeforeCoins - superCoinDiscount);
+  const earnEstimate = options.userId ? await getEarnEstimate(connection, options.userId, priceAfterDiscount) : { coins: 0 };
   return {
     productPrice,
     discountAmount,
@@ -104,6 +129,10 @@ async function calculateSummary(items, paymentMethod = '', couponCode = '', conn
     tax,
     deliveryCharge,
     cashOnDeliveryCharge,
+    superCoinDiscount,
+    superCoinsRedeemed,
+    coinsToEarn: earnEstimate.coins,
+    totalBeforeCoins,
     total
   };
 }
@@ -166,6 +195,47 @@ async function saveOrderTracking(connection, orderId, pincode, hub) {
       estimate.estimatedDeliveryMaxDays || hub?.deliveryDaysMax || null
     ]
   );
+}
+
+async function itemPolicyDays(connection, productId) {
+  const policy = await getProductReplacementPolicy(connection, productId);
+  const days = policy?.isReplacementAvailable ? Number(policy.replacementDays || 0) : 0;
+  return Math.max(0, Number.isFinite(days) ? days : 0);
+}
+
+function addEligibilityFlags(order, items) {
+  const status = String(order.delivery_status || '').toUpperCase();
+  const deliveredAt = order.delivered_at || order.delivered_on || null;
+  const now = new Date();
+  const cancellableStatuses = new Set(['PLACED', 'CONFIRMED', 'PACKED']);
+  const blockedItemStatuses = new Set(['CANCELLED', 'RETURNED', 'REFUNDED']);
+  const closedRefundStatuses = new Set(['PROCESSING', 'COMPLETED', 'REFUNDED']);
+  return items.map((item) => {
+    const itemStatus = String(item.item_status || 'ACTIVE').toUpperCase();
+    const requestStatus = String(item.request_status || '').toUpperCase();
+    const refundStatus = String(item.post_delivery_refund_status || '').toUpperCase();
+    const hasBlockingRequest = Boolean(item.post_delivery_request_id) && requestStatus !== 'REJECTED';
+    const hasClosedRefund = closedRefundStatuses.has(refundStatus) || ['REFUNDED', 'RETURN_COMPLETED'].includes(requestStatus);
+    const returnDays = Math.max(0, Number(item.return_days || 0));
+    const replacementDays = Math.max(0, Number(item.replacement_days || 0));
+    const returnEnds = deliveredAt && returnDays > 0 ? new Date(new Date(deliveredAt).getTime() + returnDays * 86400000) : null;
+    const replacementEnds = deliveredAt && replacementDays > 0 ? new Date(new Date(deliveredAt).getTime() + replacementDays * 86400000) : null;
+    const canRequestPostDelivery = status === 'DELIVERED'
+      && !blockedItemStatuses.has(itemStatus)
+      && !hasBlockingRequest
+      && !hasClosedRefund;
+    return {
+      ...item,
+      canCancel: cancellableStatuses.has(status) && !blockedItemStatuses.has(itemStatus),
+      canReturn: canRequestPostDelivery && returnDays > 0 && returnEnds && now <= returnEnds,
+      canReplace: canRequestPostDelivery && replacementDays > 0 && replacementEnds && now <= replacementEnds,
+      returnDays,
+      replacementDays,
+      returnWindowEndsAt: returnEnds ? returnEnds.toISOString() : null,
+      replacementWindowEndsAt: replacementEnds ? replacementEnds.toISOString() : null,
+      deliveredAt
+    };
+  });
 }
 
 async function deductDeliveredStock(connection, orderId) {
@@ -280,7 +350,10 @@ router.get('/summary', asyncHandler(async (req, res) => {
     `SELECT c.quantity, p.* FROM cart c JOIN products p ON p.id = c.product_id WHERE c.user_id = ?`,
     [req.user.id]
   );
-  res.json(await calculateSummary(items, req.query.paymentMethod, req.query.couponCode));
+  res.json(await calculateSummary(items, req.query.paymentMethod, req.query.couponCode, pool, {
+    userId: req.user.id,
+    superCoinsToApply: req.query.superCoins
+  }));
 }));
 
 router.get('/buy-now/summary/:productId', asyncHandler(async (req, res) => {
@@ -312,12 +385,16 @@ router.get('/buy-now/summary/:productId', asyncHandler(async (req, res) => {
       return res.status(400).json({ message: 'Summer Sale limit reached: maximum 1 quantity per customer.' });
     }
   }
-  res.json({ item: product, summary: await calculateSummary([product], req.query.paymentMethod, req.query.couponCode) });
+  res.json({ item: product, summary: await calculateSummary([product], req.query.paymentMethod, req.query.couponCode, pool, {
+    userId: req.user.id,
+    superCoinsToApply: req.query.superCoins
+  }) });
 }));
 
 router.post('/buy-now', asyncHandler(async (req, res) => {
   const { productId, addressId, paymentMethod, paymentDetails, size } = req.body;
   const couponCode = normalizeCouponCode(req.body.couponCode);
+  const superCoinsToApply = Number(req.body.superCoins || req.body.superCoinsToApply || 0);
   const qty = Math.max(1, Number(req.body.quantity || 1));
   if (!productId || !addressId || !paymentMethod) {
     return res.status(400).json({ message: 'Product, address, and payment method are required.' });
@@ -371,15 +448,18 @@ router.post('/buy-now', asyncHandler(async (req, res) => {
       return res.status(400).json({ message: 'Cash On Delivery is not available for this pincode.' });
     }
 
-    const summary = await calculateSummary([item], paymentMethod, couponCode, connection);
+    const summary = await calculateSummary([item], paymentMethod, couponCode, connection, {
+      userId: req.user.id,
+      superCoinsToApply
+    });
     const { total } = summary;
     const paidStatus = paymentMethod === 'Cash On Delivery' ? 'PENDING' : 'PAID';
     const nextOrderNumber = orderNumber();
 
     const estimate = reserveResult.hub.estimate || {};
     const [orderResult] = await connection.execute(
-      `INSERT INTO orders (order_number, user_id, address_id, total_amount, payment_method, payment_details, paid_status, delivery_status, selected_hub_id, delivery_pincode, estimated_delivery_min_days, estimated_delivery_max_days, estimated_delivery_date, coupon_id, coupon_code, discount_amount, coupon_discount_amount)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'PLACED', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO orders (order_number, user_id, address_id, total_amount, payment_method, payment_details, paid_status, delivery_status, selected_hub_id, delivery_pincode, estimated_delivery_min_days, estimated_delivery_max_days, estimated_delivery_date, coupon_id, coupon_code, discount_amount, coupon_discount_amount, super_coin_discount, super_coins_redeemed, super_coins_earned)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'PLACED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         nextOrderNumber,
         req.user.id,
@@ -396,7 +476,10 @@ router.post('/buy-now', asyncHandler(async (req, res) => {
         summary.couponId,
         summary.couponCode || null,
         summary.couponDiscountAmount,
-        summary.couponDiscountAmount
+        summary.couponDiscountAmount,
+        summary.superCoinDiscount,
+        summary.superCoinsRedeemed,
+        summary.coinsToEarn
       ]
     );
     if (summary.couponId) {
@@ -412,19 +495,35 @@ router.post('/buy-now', asyncHandler(async (req, res) => {
       }
     }
 
+    if (summary.superCoinsRedeemed > 0) {
+      const redeemed = await redeemForOrder(connection, req.user.id, orderResult.insertId, nextOrderNumber, summary.totalBeforeCoins, summary.superCoinsRedeemed);
+      if (redeemed.error) {
+        await connection.rollback();
+        return res.status(400).json({ message: redeemed.error });
+      }
+    }
+    await createOrderDetail(connection, {
+      orderId: orderResult.insertId,
+      userId: req.user.id,
+      coinsRedeemed: summary.superCoinsRedeemed,
+      redeemValue: summary.superCoinDiscount,
+      coinsToEarn: summary.coinsToEarn
+    });
+
     if (paymentDetails?.savePayment && sanitizedPayment.savePayload) {
       await savePaymentMethod(req.user.id, sanitizedPayment.savePayload);
     }
 
     const freeQuantity = Number(item.bogoFreeQuantity || 0);
+    const policyDays = await itemPolicyDays(connection, item.product_id);
     await connection.execute(
-      `INSERT INTO order_items (order_id, product_id, product_name, price, quantity, stock_quantity, selected_size, image) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [orderResult.insertId, item.product_id, item.name, item.effectivePrice, item.quantity, item.quantity + freeQuantity, item.selected_size || null, item.image]
+      `INSERT INTO order_items (order_id, product_id, product_name, price, quantity, stock_quantity, return_days, replacement_days, selected_size, image) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [orderResult.insertId, item.product_id, item.name, item.effectivePrice, item.quantity, item.quantity + freeQuantity, policyDays, policyDays, item.selected_size || null, item.image]
     );
     await saveOrderTracking(connection, orderResult.insertId, address.pincode, reserveResult.hub);
 
     await connection.commit();
-    res.status(201).json({ id: orderResult.insertId, total, paidStatus, message: 'Order placed successfully.' });
+    res.status(201).json({ id: orderResult.insertId, orderNumber: nextOrderNumber, order_number: nextOrderNumber, total, paidStatus, message: 'Order placed successfully.' });
   } catch (error) {
     await connection.rollback();
     throw error;
@@ -440,13 +539,17 @@ router.get('/monthly-template/summary/:sessionId', asyncHandler(async (req, res)
     source: 'monthly-template',
     sessionId: session.id,
     items: session.items,
-    summary: await calculateSummary(session.items, req.query.paymentMethod, req.query.couponCode)
+    summary: await calculateSummary(session.items, req.query.paymentMethod, req.query.couponCode, pool, {
+      userId: req.user.id,
+      superCoinsToApply: req.query.superCoins
+    })
   });
 }));
 
 router.post('/monthly-template/checkout', asyncHandler(async (req, res) => {
   const { checkoutSessionId, addressId, paymentMethod, paymentDetails } = req.body;
   const couponCode = normalizeCouponCode(req.body.couponCode);
+  const superCoinsToApply = Number(req.body.superCoins || req.body.superCoinsToApply || 0);
   if (!checkoutSessionId || !addressId || !paymentMethod) {
     return res.status(400).json({ message: 'Checkout session, address, and payment method are required.' });
   }
@@ -494,7 +597,10 @@ router.post('/monthly-template/checkout', asyncHandler(async (req, res) => {
       reserveResults.push(reserveResult);
     }
 
-    const summary = await calculateSummary(session.items, paymentMethod, couponCode, connection);
+    const summary = await calculateSummary(session.items, paymentMethod, couponCode, connection, {
+      userId: req.user.id,
+      superCoinsToApply
+    });
     const paidStatus = paymentMethod === 'Cash On Delivery' ? 'PENDING' : 'PAID';
     const nextOrderNumber = orderNumber();
     const slowestReserve = reserveResults
@@ -503,8 +609,8 @@ router.post('/monthly-template/checkout', asyncHandler(async (req, res) => {
     const estimate = slowestReserve?.estimate || {};
 
     const [orderResult] = await connection.execute(
-      `INSERT INTO orders (order_number, user_id, address_id, total_amount, payment_method, payment_details, paid_status, delivery_status, selected_hub_id, delivery_pincode, estimated_delivery_min_days, estimated_delivery_max_days, estimated_delivery_date, coupon_id, coupon_code, discount_amount, coupon_discount_amount, order_source)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'PLACED', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'monthly_template')`,
+      `INSERT INTO orders (order_number, user_id, address_id, total_amount, payment_method, payment_details, paid_status, delivery_status, selected_hub_id, delivery_pincode, estimated_delivery_min_days, estimated_delivery_max_days, estimated_delivery_date, coupon_id, coupon_code, discount_amount, coupon_discount_amount, super_coin_discount, super_coins_redeemed, super_coins_earned, order_source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'PLACED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'monthly_template')`,
       [
         nextOrderNumber,
         req.user.id,
@@ -521,7 +627,10 @@ router.post('/monthly-template/checkout', asyncHandler(async (req, res) => {
         summary.couponId,
         summary.couponCode || null,
         summary.couponDiscountAmount,
-        summary.couponDiscountAmount
+        summary.couponDiscountAmount,
+        summary.superCoinDiscount,
+        summary.superCoinsRedeemed,
+        summary.coinsToEarn
       ]
     );
 
@@ -538,22 +647,38 @@ router.post('/monthly-template/checkout', asyncHandler(async (req, res) => {
       }
     }
 
+    if (summary.superCoinsRedeemed > 0) {
+      const redeemed = await redeemForOrder(connection, req.user.id, orderResult.insertId, nextOrderNumber, summary.totalBeforeCoins, summary.superCoinsRedeemed);
+      if (redeemed.error) {
+        await connection.rollback();
+        return res.status(400).json({ message: redeemed.error });
+      }
+    }
+    await createOrderDetail(connection, {
+      orderId: orderResult.insertId,
+      userId: req.user.id,
+      coinsRedeemed: summary.superCoinsRedeemed,
+      redeemValue: summary.superCoinDiscount,
+      coinsToEarn: summary.coinsToEarn
+    });
+
     if (paymentDetails?.savePayment && sanitizedPayment.savePayload) {
       await savePaymentMethod(req.user.id, sanitizedPayment.savePayload);
     }
 
     for (const item of session.items) {
+      const policyDays = await itemPolicyDays(connection, item.product_id);
       await connection.execute(
-        `INSERT INTO order_items (order_id, product_id, product_name, price, quantity, stock_quantity, selected_size, image)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [orderResult.insertId, item.product_id, item.name, item.price, item.quantity, item.quantity, item.selected_size || null, item.image]
+        `INSERT INTO order_items (order_id, product_id, product_name, price, quantity, stock_quantity, return_days, replacement_days, selected_size, image)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [orderResult.insertId, item.product_id, item.name, item.price, item.quantity, item.quantity, policyDays, policyDays, item.selected_size || null, item.image]
       );
     }
     await saveOrderTracking(connection, orderResult.insertId, address.pincode, slowestReserve);
     await connection.execute("UPDATE monthly_template_checkout_sessions SET status = 'ORDERED' WHERE id = ? AND user_id = ?", [checkoutSessionId, req.user.id]);
 
     await connection.commit();
-    res.status(201).json({ id: orderResult.insertId, total: summary.total, paidStatus, message: 'Order placed successfully.' });
+    res.status(201).json({ id: orderResult.insertId, orderNumber: nextOrderNumber, order_number: nextOrderNumber, total: summary.total, paidStatus, message: 'Order placed successfully.' });
   } catch (error) {
     await connection.rollback();
     throw error;
@@ -565,6 +690,7 @@ router.post('/monthly-template/checkout', asyncHandler(async (req, res) => {
 router.post(['/', '/create'], asyncHandler(async (req, res) => {
   const { addressId, paymentMethod, paymentDetails } = req.body;
   const couponCode = normalizeCouponCode(req.body.couponCode);
+  const superCoinsToApply = Number(req.body.superCoins || req.body.superCoinsToApply || 0);
   if (!addressId || !paymentMethod) {
     return res.status(400).json({ message: 'Address and payment method are required.' });
   }
@@ -613,7 +739,10 @@ router.post(['/', '/create'], asyncHandler(async (req, res) => {
       reserveResults.push(reserveResult);
     }
 
-    const summary = await calculateSummary(items, paymentMethod, couponCode, connection);
+    const summary = await calculateSummary(items, paymentMethod, couponCode, connection, {
+      userId: req.user.id,
+      superCoinsToApply
+    });
     const { total } = summary;
     const paidStatus = paymentMethod === 'Cash On Delivery' ? 'PENDING' : 'PAID';
     const nextOrderNumber = orderNumber();
@@ -623,8 +752,8 @@ router.post(['/', '/create'], asyncHandler(async (req, res) => {
       .sort((a, b) => Number(b.deliveryDaysMax || 0) - Number(a.deliveryDaysMax || 0))[0];
     const slowestEstimate = slowestReserve?.estimate || {};
     const [orderResult] = await connection.execute(
-      `INSERT INTO orders (order_number, user_id, address_id, total_amount, payment_method, payment_details, paid_status, delivery_status, selected_hub_id, delivery_pincode, estimated_delivery_min_days, estimated_delivery_max_days, estimated_delivery_date, coupon_id, coupon_code, discount_amount, coupon_discount_amount)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'PLACED', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO orders (order_number, user_id, address_id, total_amount, payment_method, payment_details, paid_status, delivery_status, selected_hub_id, delivery_pincode, estimated_delivery_min_days, estimated_delivery_max_days, estimated_delivery_date, coupon_id, coupon_code, discount_amount, coupon_discount_amount, super_coin_discount, super_coins_redeemed, super_coins_earned)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'PLACED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         nextOrderNumber,
         req.user.id,
@@ -641,7 +770,10 @@ router.post(['/', '/create'], asyncHandler(async (req, res) => {
         summary.couponId,
         summary.couponCode || null,
         summary.couponDiscountAmount,
-        summary.couponDiscountAmount
+        summary.couponDiscountAmount,
+        summary.superCoinDiscount,
+        summary.superCoinsRedeemed,
+        summary.coinsToEarn
       ]
     );
     if (summary.couponId) {
@@ -657,22 +789,38 @@ router.post(['/', '/create'], asyncHandler(async (req, res) => {
       }
     }
 
+    if (summary.superCoinsRedeemed > 0) {
+      const redeemed = await redeemForOrder(connection, req.user.id, orderResult.insertId, nextOrderNumber, summary.totalBeforeCoins, summary.superCoinsRedeemed);
+      if (redeemed.error) {
+        await connection.rollback();
+        return res.status(400).json({ message: redeemed.error });
+      }
+    }
+    await createOrderDetail(connection, {
+      orderId: orderResult.insertId,
+      userId: req.user.id,
+      coinsRedeemed: summary.superCoinsRedeemed,
+      redeemValue: summary.superCoinDiscount,
+      coinsToEarn: summary.coinsToEarn
+    });
+
     if (paymentDetails?.savePayment && sanitizedPayment.savePayload) {
       await savePaymentMethod(req.user.id, sanitizedPayment.savePayload);
     }
 
     for (const item of items) {
       const freeQuantity = Number(item.bogoFreeQuantity || 0);
+      const policyDays = await itemPolicyDays(connection, item.product_id);
       await connection.execute(
-        `INSERT INTO order_items (order_id, product_id, product_name, price, quantity, stock_quantity, selected_size, image) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [orderResult.insertId, item.product_id, item.name, item.effectivePrice, item.quantity, item.quantity + freeQuantity, item.selected_size || null, item.image]
+        `INSERT INTO order_items (order_id, product_id, product_name, price, quantity, stock_quantity, return_days, replacement_days, selected_size, image) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [orderResult.insertId, item.product_id, item.name, item.effectivePrice, item.quantity, item.quantity + freeQuantity, policyDays, policyDays, item.selected_size || null, item.image]
       );
     }
     await saveOrderTracking(connection, orderResult.insertId, address.pincode, slowestReserve);
 
     await connection.execute('DELETE FROM cart WHERE user_id = ?', [req.user.id]);
     await connection.commit();
-    res.status(201).json({ id: orderResult.insertId, total, paidStatus, message: 'Order placed successfully.' });
+    res.status(201).json({ id: orderResult.insertId, orderNumber: nextOrderNumber, order_number: nextOrderNumber, total, paidStatus, message: 'Order placed successfully.' });
   } catch (error) {
     await connection.rollback();
     throw error;
@@ -682,6 +830,18 @@ router.post(['/', '/create'], asyncHandler(async (req, res) => {
 }));
 
 router.get('/', asyncHandler(async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    await processPendingSuperCoinRewards(connection);
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+
   const isAdmin = req.user.role === 'ADMIN';
   const [orders] = await pool.execute(
     `SELECT o.*, a.full_name, a.city, a.state,
@@ -707,7 +867,12 @@ router.get('/', asyncHandler(async (req, res) => {
      ORDER BY o.created_at DESC`,
     isAdmin ? [] : [req.user.id]
   );
-  res.json(orders);
+  res.json(orders.map((order) => ({
+    ...order,
+    deliveredAt: order.delivered_at || order.delivered_on || null,
+    superCoinAwarded: Boolean(order.super_coin_awarded),
+    superCoinEligibleAt: order.super_coin_eligible_at || null
+  })));
 }));
 
 router.get('/previous-month-items', asyncHandler(async (req, res) => {
@@ -759,7 +924,29 @@ router.get('/previous-month-items', asyncHandler(async (req, res) => {
   });
 }));
 
+router.get('/:orderId/replacement-eligibility', asyncHandler(async (req, res) => {
+  const eligibility = await getOrderReplacementEligibility(pool, {
+    orderId: req.params.orderId,
+    userId: req.user.id,
+    isAdmin: req.user.role === 'ADMIN'
+  });
+  if (!eligibility) return res.status(404).json({ message: 'Order not found.' });
+  res.json(eligibility);
+}));
+
 router.get('/:id', asyncHandler(async (req, res) => {
+  const pendingConnection = await pool.getConnection();
+  try {
+    await pendingConnection.beginTransaction();
+    await processPendingSuperCoinRewards(pendingConnection);
+    await pendingConnection.commit();
+  } catch (error) {
+    await pendingConnection.rollback();
+    throw error;
+  } finally {
+    pendingConnection.release();
+  }
+
   const isAdmin = req.user.role === 'ADMIN';
   const [[order]] = await pool.execute(
     `SELECT o.*, a.full_name, a.phone, a.line1, a.line2, a.city, a.state, a.pincode,
@@ -786,6 +973,15 @@ router.get('/:id', asyncHandler(async (req, res) => {
             pdr.request_reason,
             pdr.request_status,
             pdr.refund_status AS post_delivery_refund_status,
+            pdr.refund_amount,
+            pdr.refund_payment_method,
+            pdr.refund_transaction_id,
+            pdr.refund_processing_at,
+            pdr.refund_completed_at,
+            pdr.return_picked_up_at,
+            pdr.return_completed_at,
+            pdr.requested_at,
+            pdr.updated_at,
             pr.id AS review_id,
             pr.rating,
             pr.review_text,
@@ -797,7 +993,15 @@ router.get('/:id', asyncHandler(async (req, res) => {
      WHERE oi.order_id = ?`,
     [req.params.id]
   );
-  res.json({ ...order, items });
+  const flaggedItems = addEligibilityFlags(order, items);
+  res.json({
+    ...order,
+    deliveredAt: order.delivered_at || order.delivered_on || null,
+    superCoinAwarded: Boolean(order.super_coin_awarded),
+    superCoinEligibleAt: order.super_coin_eligible_at || null,
+    tracking_events: buildTrackingEvents(order, flaggedItems),
+    items: flaggedItems
+  });
 }));
 
 router.patch('/:id/status', requireAdmin, asyncHandler(async (req, res) => {
@@ -813,8 +1017,9 @@ router.patch('/:id/status', requireAdmin, asyncHandler(async (req, res) => {
     }
 
     let stockDeducted = Boolean(order.stock_deducted);
-    let deliveredOn = order.delivered_on;
+    let deliveredOn = order.delivered_at || order.delivered_on;
     const nextDeliveryStatus = delivery_status || order.delivery_status;
+    const wasDelivered = order.delivery_status === 'DELIVERED';
 
     if (nextDeliveryStatus === 'DELIVERED' && !stockDeducted) {
       const stockError = await deductDeliveredStock(connection, order.id);
@@ -823,13 +1028,17 @@ router.patch('/:id/status', requireAdmin, asyncHandler(async (req, res) => {
         return res.status(400).json({ message: stockError });
       }
       stockDeducted = true;
-      deliveredOn = new Date();
+      deliveredOn = deliveredOn || new Date();
     }
 
     if (RESTORE_STOCK_STATUSES.has(nextDeliveryStatus) && stockDeducted) {
       await restoreDeliveredStock(connection, order.id);
       stockDeducted = false;
       deliveredOn = null;
+    }
+
+    if (RESTORE_STOCK_STATUSES.has(nextDeliveryStatus) || paid_status === 'FAILED') {
+      await reverseOrderCoins(connection, order);
     }
 
     let nextPaidStatus = paid_status || null;
@@ -847,10 +1056,18 @@ router.patch('/:id/status', requireAdmin, asyncHandler(async (req, res) => {
        SET delivery_status = ?,
            paid_status = COALESCE(?, paid_status),
            delivered_on = ?,
-           stock_deducted = ?
+           delivered_at = ?,
+           stock_deducted = ?,
+           super_coin_eligible_at = CASE WHEN ? IS NULL THEN NULL ELSE super_coin_eligible_at END
        WHERE id = ?`,
-      [nextDeliveryStatus, nextPaidStatus, deliveredOn, stockDeducted, order.id]
+      [nextDeliveryStatus, nextPaidStatus, deliveredOn, deliveredOn, stockDeducted, deliveredOn, order.id]
     );
+
+    if (nextDeliveryStatus === 'DELIVERED' && (!wasDelivered || !order.super_coin_eligible_at)) {
+      await handleDeliveredOrderSuperCoins(connection, order.id, deliveredOn || new Date());
+    } else {
+      await processPendingSuperCoinRewards(connection);
+    }
 
     await connection.commit();
     res.json({ message: 'Order status updated.' });
